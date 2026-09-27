@@ -1,0 +1,1 @@
+Notepad: backend/venv/ frontend/node_modules/ __pycache__/ *.pyc .pytest_cache/ .env 
