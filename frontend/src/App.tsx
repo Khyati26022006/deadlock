@@ -7,6 +7,7 @@ import Detection from './pages/Detection'
 import Avoidance from './pages/Avoidance'
 import Prevention from './pages/Prevention'
 import Recovery from './pages/Recovery'
+import AutoSimulation from './pages/AutoSimulation'
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
             <Route path="/avoidance"        element={<Avoidance />} />
             <Route path="/prevention"       element={<Prevention />} />
             <Route path="/recovery"         element={<Recovery />} />
+            <Route path="/auto-simulation"  element={<AutoSimulation />} />
           </Routes>
         </div>
       </ScenarioProvider>

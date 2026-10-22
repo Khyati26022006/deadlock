@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { to: '/avoidance',         label: 'Avoidance' },
   { to: '/prevention',        label: 'Prevention' },
   { to: '/recovery',          label: 'Recovery' },
+  { to: '/auto-simulation',   label: 'Auto Simulation' },
 ]
 
 export default function NavBar() {

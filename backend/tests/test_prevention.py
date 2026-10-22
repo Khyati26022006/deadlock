@@ -464,15 +464,22 @@ class TestMutualExclusion:
         assert result.present is True
         assert "R0" in result.affected_resources
 
-    def test_absent_when_enough_instances(self):
-        """R0 has 3 instances and only 2 processes are interested → no exclusion."""
+    def test_present_when_processes_hold_resources(self):
+        """
+        Both processes hold a unit of R0, even though total_instances=3 is
+        plentiful.  In this model every allocated unit is exclusively held,
+        so mutual exclusion is present regardless of total-instance headroom.
+        """
         procs = make_processes("P0", "P1")
         res   = make_resources(("R0", 3))
         alloc = [[1], [1]]
         need  = [[0], [0]]
         avail = [1]
         result = check_mutual_exclusion(procs, res, alloc, need, avail)
-        assert result.present is False
+        assert result.present is True
+        assert "R0" in result.affected_resources
+        assert "P0" in result.affected_processes
+        assert "P1" in result.affected_processes
 
     def test_condition_name(self):
         result = check_mutual_exclusion(PROCS_2, RES_2, ALLOC_2, NEED_2, AVAIL_2)
@@ -491,6 +498,128 @@ class TestMutualExclusion:
         avail = [1, 1]
         result = check_mutual_exclusion(procs, res, alloc, need, avail)
         assert result.present is False
+
+
+# ===========================================================================
+# Regression – forced-deadlock 5-process scenario
+# ===========================================================================
+
+class TestMutualExclusionRegressionForcedDeadlock:
+    """
+    Regression test for the corrected check_mutual_exclusion() logic.
+
+    Scenario: 5 processes, 3 resource types.
+    P0 and P1 form a genuine circular-wait deadlock (each holds resources
+    exclusively and requests what the other holds).
+    P2, P3, P4 have zero allocation and zero requests (bystanders).
+
+    Under the OLD (incorrect) heuristic, mutual_exclusion came back
+    present=False because total_instances=[8,10,9] dwarfed the number of
+    interested processes, leading the summary to claim "deadlock cannot
+    occur" — directly contradicting detect_deadlock() returning DEADLOCKED.
+
+    Under the CORRECT logic, mutual_exclusion must be present=True because
+    P0 and P1 both hold resource units exclusively.
+    """
+
+    # Exact matrices from the confirmed forced-deadlock scenario
+    PROCS_5 = make_processes("P0", "P1", "P2", "P3", "P4")
+    RES_3   = make_resources(("R0", 8), ("R1", 10), ("R2", 9))
+
+    ALLOC_5 = [
+        [2, 1, 3],   # P0 holds
+        [1, 3, 1],   # P1 holds
+        [0, 0, 0],   # P2 – bystander
+        [0, 0, 0],   # P3 – bystander
+        [0, 0, 0],   # P4 – bystander
+    ]
+    NEED_5 = [
+        [1, 3, 1],   # P0 needs what P1 holds
+        [1, 1, 3],   # P1 needs what P0 holds
+        [1, 2, 1],   # P2 – has need but no allocation
+        [2, 1, 2],   # P3
+        [0, 1, 0],   # P4
+    ]
+    AVAIL_5  = [0, 0, 0]
+    REQ_5 = [
+        [1, 3, 1],   # P0 requests P1's allocation → circular wait
+        [2, 1, 3],   # P1 requests P0's allocation → circular wait
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+    ]
+
+    def test_mutual_exclusion_present_true(self):
+        """
+        P0 and P1 hold resources exclusively → mutual exclusion must be present.
+        This was the root regression: the old code incorrectly returned False.
+        """
+        result = check_mutual_exclusion(
+            self.PROCS_5, self.RES_3, self.ALLOC_5, self.NEED_5, self.AVAIL_5
+        )
+        assert result.present is True, (
+            "mutual_exclusion must be present=True when any process holds a "
+            "resource exclusively (P0 and P1 both hold resources here)."
+        )
+
+    def test_mutual_exclusion_names_holding_processes(self):
+        result = check_mutual_exclusion(
+            self.PROCS_5, self.RES_3, self.ALLOC_5, self.NEED_5, self.AVAIL_5
+        )
+        assert "P0" in result.affected_processes
+        assert "P1" in result.affected_processes
+
+    def test_mutual_exclusion_names_held_resources(self):
+        result = check_mutual_exclusion(
+            self.PROCS_5, self.RES_3, self.ALLOC_5, self.NEED_5, self.AVAIL_5
+        )
+        # P0 and P1 hold all three resource types
+        assert "R0" in result.affected_resources
+        assert "R1" in result.affected_resources
+        assert "R2" in result.affected_resources
+
+    def test_zero_allocation_bystanders_not_in_affected_processes(self):
+        """P2/P3/P4 hold nothing — they must not appear in affected_processes."""
+        result = check_mutual_exclusion(
+            self.PROCS_5, self.RES_3, self.ALLOC_5, self.NEED_5, self.AVAIL_5
+        )
+        assert "P2" not in result.affected_processes
+        assert "P3" not in result.affected_processes
+        assert "P4" not in result.affected_processes
+
+    def test_full_analyze_prevention_conditions_present_4(self):
+        """
+        With the fix, all four Coffman conditions are present for this scenario,
+        so conditions_present must be 4 and the summary must not claim
+        'deadlock cannot occur'.
+        """
+        result = analyze_prevention(
+            self.PROCS_5, self.RES_3, self.ALLOC_5, self.NEED_5,
+            self.AVAIL_5, self.REQ_5
+        )
+        assert result.mutual_exclusion.present is True
+        assert result.hold_and_wait.present    is True
+        assert result.no_preemption.present    is True
+        assert result.circular_wait.present    is True
+        assert result.conditions_present == 4
+
+    def test_summary_does_not_claim_deadlock_impossible(self):
+        result = analyze_prevention(
+            self.PROCS_5, self.RES_3, self.ALLOC_5, self.NEED_5,
+            self.AVAIL_5, self.REQ_5
+        )
+        forbidden_phrases = [
+            "deadlock cannot occur",
+            "deadlock is structurally impossible",
+            "deadlock is impossible",
+        ]
+        summary_lower = result.summary.lower()
+        for phrase in forbidden_phrases:
+            assert phrase not in summary_lower, (
+                f"Summary must not assert '{phrase}' — that determination "
+                f"belongs to detection, not prevention analysis. "
+                f"Actual summary: {result.summary!r}"
+            )
 
 
 # ===========================================================================

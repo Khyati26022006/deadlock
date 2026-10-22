@@ -218,19 +218,18 @@ def check_mutual_exclusion(
     """
     Analyse the Mutual Exclusion Coffman condition.
 
-    A resource enforces mutual exclusion when its total number of instances
-    is less than the number of processes that could simultaneously want it —
-    meaning not all interested processes can hold a copy at once.
+    In this project's model every nonzero Allocation entry represents a unit
+    that is exclusively held by exactly one process — there is no concept of
+    shareable resources.  Therefore mutual exclusion is present whenever ANY
+    process currently holds at least one unit of ANY resource.
 
-    We detect this by comparing total_instances against the count of
-    processes with a nonzero entry in their allocation OR need row for
-    that resource (i.e., processes that currently hold it or may still
-    need it).
+    The condition is absent only in the degenerate case where the entire
+    Allocation matrix is zero (a completely idle system where nothing has
+    been handed out to anyone).
 
-    Mutual exclusion is nearly always structurally present for physical
-    resources (printers, disk drives, locks).  The explanation therefore
-    notes that this condition is often unavoidable and that the realistic
-    prevention strategy is to use sharable resources where possible.
+    This correctly handles the forced-deadlock scenario where P0 and P1 each
+    hold resources exclusively: those held units are, by definition, not
+    simultaneously available to any other process.
 
     Parameters
     ----------
@@ -244,43 +243,43 @@ def check_mutual_exclusion(
     n_proc = len(processes)
     n_res  = len(resources)
 
-    exclusive_resources: List[str] = []   # resource IDs that force exclusive use
+    # Collect (process_id, resource_id) pairs for every nonzero allocation cell.
+    # Also track which resource IDs and process IDs are involved.
+    holding_procs: List[str] = []
+    holding_res: List[str]   = []
 
-    for j in range(n_res):
-        res        = resources[j]
-        total_inst = res.get("total_instances", 1) if isinstance(res, dict) else 1
-        res_id     = _resource_id(resources, j)
+    for i in range(n_proc):
+        proc_holds_something = False
+        for j in range(n_res):
+            if allocation[i][j] > 0:
+                proc_holds_something = True
+                res_id = _resource_id(resources, j)
+                if res_id not in holding_res:
+                    holding_res.append(res_id)
+        if proc_holds_something:
+            holding_procs.append(_process_id(processes, i))
 
-        # Count processes that currently hold OR still need this resource
-        interested = sum(
-            1 for i in range(n_proc)
-            if (allocation[i][j] > 0 or need[i][j] > 0)
-        )
-
-        # If total_instances < number of concurrently-interested processes,
-        # not all can be served simultaneously → exclusive use is forced.
-        if interested > 0 and total_inst < interested:
-            exclusive_resources.append(res_id)
-
-    present = len(exclusive_resources) > 0
+    present = len(holding_procs) > 0
 
     if present:
-        res_list = ", ".join(exclusive_resources)
+        proc_list = ", ".join(holding_procs)
+        res_list  = ", ".join(holding_res)
         explanation = (
-            f"Mutual exclusion is present. "
-            f"Resource(s) [{res_list}] have fewer total instances than the number of "
-            f"processes that could simultaneously need them, forcing exclusive access. "
-            f"This condition is structurally unavoidable for physical resources such as "
-            f"printers, disk drives, and hardware locks — a resource that cannot be "
-            f"shared by its nature will always impose mutual exclusion."
+            f"Mutual Exclusion is present. "
+            f"Every allocated resource unit in this model is held exclusively — "
+            f"only one process can use a granted unit at a time. "
+            f"Process(es) [{proc_list}] currently hold at least one unit of "
+            f"resource(s) [{res_list}] exclusively. "
+            f"This condition is structurally unavoidable for physical resources "
+            f"such as locks, printers, and I/O devices — a non-shareable resource "
+            f"will always impose mutual exclusion on the processes competing for it."
         )
     else:
         explanation = (
-            f"Mutual exclusion does not appear to be a limiting factor in this scenario. "
-            f"Every resource has enough instances to serve all potentially interested "
-            f"processes concurrently, so no resource forces exclusive access right now. "
-            f"Note: mutual exclusion is inherent to many physical devices and hardware "
-            f"resources; this analysis reflects only the current scenario data."
+            "Mutual Exclusion is NOT present in this scenario. "
+            "No process currently holds any resource unit (the entire Allocation "
+            "matrix is zero). This is a completely idle system state — no resource "
+            "is being used exclusively by anyone right now."
         )
 
     prevention_strategy = (
@@ -296,7 +295,8 @@ def check_mutual_exclusion(
         present=present,
         explanation=explanation,
         prevention_strategy=prevention_strategy,
-        affected_resources=exclusive_resources,
+        affected_processes=holding_procs,
+        affected_resources=holding_res,
     )
 
 
@@ -708,18 +708,19 @@ def analyze_prevention(
     elif n_present == 0:
         summary = (
             "None of the four Coffman conditions are currently present. "
-            "Deadlock is structurally impossible in this state."
+            "No process holds any resource, so the structural prerequisites "
+            "for deadlock are absent in this idle state."
         )
     else:
         absent_str  = ", ".join(absent_names)  if absent_names  else "none"
         present_str = ", ".join(present_names) if present_names else "none"
         summary = (
             f"{n_present} of 4 Coffman condition(s) present: [{present_str}]. "
-            f"Condition(s) already absent: [{absent_str}]. "
+            f"Condition(s) currently absent: [{absent_str}]. "
             f"Deadlock requires ALL four conditions to hold simultaneously — "
-            f"since [{absent_str}] is/are absent, deadlock cannot occur in "
-            f"this state. Maintaining the absence of even one condition is "
-            f"sufficient to prevent deadlock."
+            f"maintaining the absence of even one condition is sufficient to "
+            f"prevent deadlock. Whether a deadlock is actually occurring right "
+            f"now is determined by detection analysis, not prevention analysis."
         )
 
     return PreventionResult(
