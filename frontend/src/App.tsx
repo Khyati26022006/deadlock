@@ -13,17 +13,19 @@ export default function App() {
   return (
     <BrowserRouter>
       <ScenarioProvider>
-        <div className="min-h-screen bg-gray-950 text-white">
+        <div className="min-h-screen bg-[#f8f9fa] text-neutral-900 flex flex-col font-sans">
           <NavBar />
-          <Routes>
-            <Route path="/"                 element={<Dashboard />} />
-            <Route path="/scenario-builder" element={<ScenarioBuilder />} />
-            <Route path="/detection"        element={<Detection />} />
-            <Route path="/avoidance"        element={<Avoidance />} />
-            <Route path="/prevention"       element={<Prevention />} />
-            <Route path="/recovery"         element={<Recovery />} />
-            <Route path="/auto-simulation"  element={<AutoSimulation />} />
-          </Routes>
+          <main className="flex-1">
+            <Routes>
+              <Route path="/"                 element={<Dashboard />} />
+              <Route path="/scenario-builder" element={<ScenarioBuilder />} />
+              <Route path="/detection"        element={<Detection />} />
+              <Route path="/avoidance"        element={<Avoidance />} />
+              <Route path="/prevention"       element={<Prevention />} />
+              <Route path="/recovery"         element={<Recovery />} />
+              <Route path="/auto-simulation"  element={<AutoSimulation />} />
+            </Routes>
+          </main>
         </div>
       </ScenarioProvider>
     </BrowserRouter>

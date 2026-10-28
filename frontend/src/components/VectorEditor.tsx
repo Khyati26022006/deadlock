@@ -1,5 +1,3 @@
-/** Single-row vector editor (Available / Request for one process). */
-
 interface Props {
   vector: number[]
   onChange?: (v: number[]) => void
@@ -16,11 +14,13 @@ export default function VectorEditor({ vector, onChange, colLabels, readOnly = f
   }
 
   return (
-    <div className="flex flex-wrap gap-2 items-end">
+    <div className="flex flex-wrap gap-2.5 items-end rounded-lg border border-neutral-200/80 bg-neutral-50/50 p-3">
       {vector.map((v, i) => (
-        <div key={i} className="flex flex-col items-center gap-1">
+        <div key={i} className="flex flex-col items-center gap-1.5">
           {colLabels && (
-            <span className="text-xs text-gray-500">{colLabels[i] ?? `R${i}`}</span>
+            <span className="text-xs text-neutral-500 font-mono font-semibold uppercase tracking-wider">
+              {colLabels[i] ?? `R${i}`}
+            </span>
           )}
           <input
             type="number"
@@ -29,11 +29,10 @@ export default function VectorEditor({ vector, onChange, colLabels, readOnly = f
             readOnly={readOnly || !onChange}
             onChange={(e) => handleChange(i, e.target.value)}
             className={[
-              'w-14 text-center rounded-md border py-1 text-sm font-mono',
-              'focus:outline-none focus:ring-1 focus:ring-blue-500',
+              'mono-input shadow-2xs',
               readOnly || !onChange
-                ? 'bg-gray-900 border-gray-700 text-gray-400 cursor-default'
-                : 'bg-gray-800 border-gray-600 text-white',
+                ? 'text-neutral-500 bg-neutral-100/70 border-neutral-200 cursor-default'
+                : 'text-neutral-900 hover:border-neutral-400 focus:border-neutral-900',
             ].join(' ')}
           />
         </div>

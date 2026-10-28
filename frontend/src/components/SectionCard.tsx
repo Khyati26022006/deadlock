@@ -2,15 +2,25 @@ import type { ReactNode } from 'react'
 
 interface Props {
   title: string
+  subtitle?: string
+  action?: ReactNode
   children: ReactNode
   className?: string
 }
 
-export default function SectionCard({ title, children, className = '' }: Props) {
+export default function SectionCard({ title, subtitle, action, children, className = '' }: Props) {
   return (
-    <div className={`bg-gray-800 rounded-xl border border-gray-700 p-5 space-y-4 ${className}`}>
-      <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-400">{title}</h2>
-      {children}
+    <div className={`card p-5 sm:p-6 space-y-4 ${className}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="section-label">{title}</h2>
+          {subtitle && (
+            <p className="text-xs text-neutral-500 mt-0.5">{subtitle}</p>
+          )}
+        </div>
+        {action && <div>{action}</div>}
+      </div>
+      <div>{children}</div>
     </div>
   )
 }

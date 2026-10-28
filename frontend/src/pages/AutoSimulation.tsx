@@ -1,16 +1,7 @@
 /**
  * Auto Simulation page (/auto-simulation)
  *
- * Completely isolated from ScenarioContext — all state is local.
- *
- * Phase-2 enhancements:
- *  • All 4 API calls fire once on generate; results cached in state.
- *  • Clickable step navigator (SimStepper) — jump to any step freely.
- *  • Recovery step greyed-out + tooltip when no deadlock.
- *  • 3-part explanation panel per step (concept / result / interpretation).
- *  • Play All / Pause auto-advance every 3 s.
- *  • Previous / Next buttons + ← → keyboard navigation.
- *  • Summary strip showing all 4 outcomes once results are ready.
+ * Clean, advanced light-theme OS simulator interface with monochromatic black/gray styling.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -54,125 +45,74 @@ function makeResourceDefs(labels: string[], total: number[]) {
   return labels.map((id, j) => ({ id, name: `Resource ${j}`, total_instances: total[j] }))
 }
 
-// ─── Explanation generators (use real data — no hardcoded verdicts) ───────────
+// ─── Explanation generators ───────────────────────────────────────────────────
 
 function explainAvoidance(r: SafetyResponse, processLabels: string[]): string {
   if (r.is_safe) {
-    const seq = r.safe_sequence.map((i) => processLabels[i] ?? `P${i}`)
-    if (seq.length === 0) return 'The system is in a safe state.'
-    const first = seq[0]
-    const rest = seq.slice(1)
-    let text = `${first} can finish first because its remaining need fits within the currently available resources.`
-    if (rest.length > 0) {
-      text += ` After it releases its allocation, ${rest.join(' → ')} can each proceed in turn, confirming the safe sequence ${seq.join(' → ')}.`
-    }
-    text += ' No deadlock can occur as long as the system stays in this state.'
-    return text
+    const seq = r.safe_sequence.map((i) => processLabels[i] ?? `P${i}`).join(' → ')
+    return (
+      `The Banker's Algorithm verified that the system is in a SAFE state. ` +
+      `Even if every process suddenly requests its declared maximum demand simultaneously, ` +
+      `the OS can satisfy them in the order ${seq} without entering deadlock.`
+    )
   } else {
     return (
-      'No safe execution sequence exists for this state. ' +
-      'At least one process cannot obtain all the resources it may still need, ' +
-      'which means the system is at risk — a future resource request could lead directly into deadlock. ' +
-      'This is an unsafe state, not a confirmed deadlock: if no further requests are made the system may still finish, ' +
-      'but the Banker\'s Algorithm would deny any new request that keeps the state unsafe.'
+      `The system is in an UNSAFE state. ` +
+      `No ordering of processes guarantees all can finish under worst-case demands. ` +
+      `While not yet deadlocked, granting additional resources without caution could trigger an unrecoverable freeze.`
     )
   }
 }
 
 function explainDetection(r: DetectionResponse, processLabels: string[]): string {
-  if (!r.deadlock_detected) {
-    const completed = r.completed_processes.map((i) => processLabels[i] ?? `P${i}`)
-    let text = 'No circular-wait cycle was found in the current request graph. '
-    if (completed.length > 0) {
-      text += `All processes — ${completed.join(', ')} — can complete using the resources they are actively waiting for right now. `
-    }
-    text += 'The system is not deadlocked at this moment.'
-    return text
-  } else {
-    const stuck = r.deadlocked_processes.map((i) => processLabels[i] ?? `P${i}`)
+  if (r.deadlock_detected) {
+    const dead = r.deadlocked_processes.map((i) => processLabels[i] ?? `P${i}`).join(', ')
     return (
-      `${stuck.join(', ')} ${stuck.length === 1 ? 'is' : 'are'} confirmed deadlocked — ` +
-      `${stuck.length === 1 ? 'it holds' : 'they hold'} resources that other deadlocked ` +
-      `${stuck.length === 1 ? 'processes need' : 'processes need'}, while simultaneously ` +
-      `waiting for resources held by those same processes, forming an unresolvable circular wait. ` +
-      `Unlike an unsafe state, this is not a risk — the system is already stuck and cannot ` +
-      `progress without external intervention.`
+      `Deadlock confirmed. Process(es) ${dead} are caught in a circular wait. ` +
+      `Each is waiting for a resource held by another in the set, and none can proceed without intervention.`
+    )
+  } else {
+    return (
+      `No deadlock detected in the current state. ` +
+      `Every process can eventually obtain the resources it is actively waiting for using currently available units and subsequent releases.`
     )
   }
 }
 
 function explainPrevention(r: PreventionResponse): string {
-  const present = (
-    ['mutual_exclusion', 'hold_and_wait', 'no_preemption', 'circular_wait'] as const
-  )
-    .filter((k) => r[k].present)
-    .map((k) =>
-      k === 'mutual_exclusion'
-        ? 'Mutual Exclusion'
-        : k === 'hold_and_wait'
-        ? 'Hold-and-Wait'
-        : k === 'no_preemption'
-        ? 'No Preemption'
-        : 'Circular Wait',
-    )
-
-  if (present.length === 0) {
+  const count = r.conditions_present
+  if (count === 4) {
     return (
-      'None of the four Coffman conditions are present in this scenario, ' +
-      'which means deadlock is structurally impossible here. ' +
-      'This is the strongest possible prevention outcome.'
+      `All 4 Coffman conditions are present. Mutual exclusion, hold-and-wait, no-preemption, and circular wait are all satisfied. ` +
+      `The system architecture is fully vulnerable to deadlock.`
+    )
+  } else if (count === 0) {
+    return (
+      `Zero Coffman conditions are present. The system is structurally immune to deadlock under this configuration.`
+    )
+  } else {
+    return (
+      `${count} of 4 Coffman conditions are active. Deadlock requires all 4 conditions simultaneously. ` +
+      `Breaking the remaining condition(s) prevents deadlocks entirely.`
     )
   }
-
-  const last = present[present.length - 1]
-  const others = present.slice(0, -1)
-  const list = others.length > 0 ? `${others.join(', ')} and ${last}` : last
-
-  let text = `${list} ${present.length === 1 ? 'is' : 'are'} present in this scenario. `
-
-  if (present.includes('Circular Wait')) {
-    text +=
-      'Circular Wait is the most critical condition — eliminating it alone (e.g. by imposing a total ordering on resource types) is sufficient to prevent deadlock regardless of the other conditions. '
-  } else if (present.includes('Hold-and-Wait')) {
-    text +=
-      'Breaking Hold-and-Wait (e.g. requiring processes to request all resources upfront) would eliminate the risk, since a process that holds nothing cannot be part of a cycle. '
-  }
-
-  text +=
-    `Removing any single one of the ${present.length} present condition${present.length > 1 ? 's' : ''} ` +
-    'by design or policy would make deadlock impossible in this configuration.'
-
-  return text
 }
 
 function explainRecovery(
   r: RecoveryResponse,
-  detectionResult: DetectionResponse,
+  det: DetectionResponse,
   processLabels: string[],
 ): string {
-  const terminated = r.processes_terminated
-  const wasstuck = detectionResult.deadlocked_processes.map((i) => processLabels[i] ?? `P${i}`)
-
+  const wasstuck = det.deadlocked_processes.map((i) => processLabels[i] ?? `P${i}`)
   if (r.success) {
-    const steps = r.termination_steps.length
-    let text = `The deadlock involving ${wasstuck.join(', ')} was resolved by terminating `
-    if (terminated.length === 1) {
-      text += `${terminated[0]}`
-    } else {
-      text += `${terminated.slice(0, -1).join(', ')} and ${terminated[terminated.length - 1]}`
-    }
-    text += ` in ${steps} step${steps !== 1 ? 's' : ''}. `
-    text +=
-      `Each terminated process released its allocated resources back to the available pool, ` +
-      `allowing the remaining processes to proceed. `
-    text += `The system can now make progress.`
-    return text
+    const steps = r.termination_steps.map((s) => s.terminated_process).join(', ')
+    return (
+      `Deadlock successfully resolved. The recovery engine aborted ${steps} using lowest PID priority, ` +
+      `reclaiming their allocated resources and breaking the circular dependency.`
+    )
   } else {
     return (
-      `Recovery was attempted for the deadlocked processes (${wasstuck.join(', ')}) ` +
-      `but could not fully resolve the situation. ` +
-      `This may indicate insufficient resources even after termination, ` +
-      `or a scenario where all processes must be terminated.`
+      `Recovery was attempted for ${wasstuck.join(', ')} but could not fully resolve the deadlock with the selected strategy.`
     )
   }
 }
@@ -189,13 +129,14 @@ function VectorRow({
   colLabels: string[]
 }) {
   return (
-    <div>
-      <p className="text-xs text-gray-500 mb-1">{label}</p>
-      <div className="flex gap-3 flex-wrap">
+    <div className="card p-4">
+      <span className="section-label block mb-2">{label}</span>
+      <div className="flex gap-2.5 flex-wrap">
         {values.map((v, j) => (
-          <div key={j} className="flex flex-col items-center gap-0.5">
-            <span className="text-sm font-bold text-white font-mono">{v}</span>
-            <span className="text-xs text-gray-600">{colLabels[j]}</span>
+          <div key={j} className="flex items-center gap-2 bg-neutral-50 border border-neutral-200/90 rounded-md px-3 py-1.5 shadow-2xs">
+            <span className="text-xs font-mono font-bold text-neutral-500">{colLabels[j]}</span>
+            <span className="w-px h-3 bg-neutral-200" />
+            <span className="text-sm font-mono font-bold text-neutral-900">{v}</span>
           </div>
         ))}
       </div>
@@ -219,22 +160,25 @@ function StatusBadge({
   const isWarn = warn && !ok
   return (
     <div
-      className={[
-        'inline-flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm',
+      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md font-semibold text-xs border ${
         ok
-          ? 'bg-green-900 border border-green-500 text-green-300'
+          ? 'bg-neutral-900 text-white border-neutral-900 shadow-2xs'
           : isWarn
-          ? 'bg-yellow-900 border border-yellow-500 text-yellow-300'
-          : 'bg-red-900 border border-red-500 text-red-300',
-      ].join(' ')}
+          ? 'bg-amber-50 text-amber-800 border-amber-300'
+          : 'bg-rose-50 text-rose-700 border-rose-300'
+      }`}
     >
-      <span>{ok ? '✅' : isWarn ? '⚠️' : '❌'}</span>
+      <span
+        className={`w-2 h-2 rounded-full ${
+          ok ? 'bg-emerald-400' : isWarn ? 'bg-amber-500' : 'bg-rose-500'
+        }`}
+      />
       <span>{ok ? okLabel : isWarn ? (warnLabel ?? badLabel) : badLabel}</span>
     </div>
   )
 }
 
-/** 3-part explanation panel wrapper */
+/** 2-part explanation panel wrapper */
 function ExplainPanel({
   what,
   meaning,
@@ -243,14 +187,14 @@ function ExplainPanel({
   meaning: string
 }) {
   return (
-    <div className="rounded-lg border border-gray-700 bg-gray-900/60 divide-y divide-gray-700 text-sm">
-      <div className="px-4 py-3">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-1">What this step does</p>
-        <p className="text-gray-300 leading-relaxed">{what}</p>
+    <div className="card divide-y divide-neutral-100 overflow-hidden text-xs sm:text-sm">
+      <div className="p-4 bg-neutral-50/50">
+        <span className="section-label block mb-1 text-[10px]">Algorithm Mechanism</span>
+        <p className="text-neutral-600 leading-relaxed">{what}</p>
       </div>
-      <div className="px-4 py-3">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-1">What this means</p>
-        <p className="text-gray-300 leading-relaxed">{meaning}</p>
+      <div className="p-4 bg-white">
+        <span className="section-label block mb-1 text-[10px]">Simulation Interpretation</span>
+        <p className="text-neutral-800 leading-relaxed font-medium">{meaning}</p>
       </div>
     </div>
   )
@@ -258,29 +202,25 @@ function ExplainPanel({
 
 // ─── Step content panels ─────────────────────────────────────────────────────
 
-function StepScenario({
-  scenario,
-}: {
-  scenario: RandomScenario
-}) {
+function StepScenario({ scenario }: { scenario: RandomScenario }) {
   const { allocation, maximum, available, processLabels, resourceLabels } = scenario
   return (
     <div className="space-y-5">
       <ExplainPanel
-        what="This is the randomly generated resource-allocation state — the starting point for every analysis that follows. Each process has a maximum demand it will ever make, plus the resources it currently holds (allocation). The system also has some resources that are not currently held by any process (available)."
-        meaning="These numbers are the raw inputs to all subsequent algorithms. The allocation and maximum matrices together let us derive what each process still needs, which the Banker's Algorithm uses to judge safety. The available vector is what the OS could hand out right now without asking any process to release anything."
+        what="This is the synthesized resource-allocation state. Each process defines its maximum resource claim and its currently allocated units. Available vector holds free units remaining in the system."
+        meaning="These matrices serve as baseline inputs for safety analysis, detection of pending waits, and condition checks."
       />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Allocation</p>
+          <span className="section-label block mb-2">Allocation Matrix (Held)</span>
           <MatrixEditor matrix={allocation} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
         </div>
         <div>
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Maximum</p>
+          <span className="section-label block mb-2">Maximum Demand Matrix (Declared Peak)</span>
           <MatrixEditor matrix={maximum} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
         </div>
       </div>
-      <VectorRow label="Available" values={available} colLabels={resourceLabels} />
+      <VectorRow label="System Available Vector" values={available} colLabels={resourceLabels} />
     </div>
   )
 }
@@ -290,19 +230,23 @@ function StepNeed({ scenario }: { scenario: RandomScenario }) {
   return (
     <div className="space-y-5">
       <ExplainPanel
-        what="The Need matrix tells us how many more resources each process might still request before it finishes. It is computed as Need = Maximum − Allocation. This is the information the Banker's Algorithm uses to decide whether a state is safe."
-        meaning="A high Need value means a process could still demand a lot more — it is a bigger risk to the system's safety. A Need of zero in every column means the process is effectively done and will release its allocation back shortly. The Banker's Algorithm checks whether there is an order in which every process can satisfy its full Need using only the current Available resources plus whatever earlier processes release."
+        what="The Need matrix quantifies remaining potential demand: Need[i][j] = Maximum[i][j] - Allocation[i][j]. This defines the maximum additional units process i could request before termination."
+        meaning="Banker's Algorithm uses Need to simulate whether free units can satisfy any process's worst-case claims to completion."
       />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Need = Maximum − Allocation</p>
+          <span className="section-label block mb-2">Need Matrix (Calculated)</span>
           <MatrixEditor matrix={need} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
         </div>
-        <div className="space-y-3">
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Verification (Allocation + Need = Maximum)</p>
-          <MatrixEditor matrix={allocation} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
-          <p className="text-xs text-gray-600 mt-1">+ Allocation above = Maximum →</p>
-          <MatrixEditor matrix={maximum} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
+        <div className="space-y-4">
+          <div>
+            <span className="section-label block mb-2">Allocation Component</span>
+            <MatrixEditor matrix={allocation} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
+          </div>
+          <div>
+            <span className="section-label block mb-2">Maximum Component</span>
+            <MatrixEditor matrix={maximum} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
+          </div>
         </div>
       </div>
     </div>
@@ -316,57 +260,58 @@ function StepAvoidance({
   scenario: RandomScenario
   result: SafetyResponse
 }) {
-  const { processLabels, resourceLabels } = scenario
+  const { processLabels } = scenario
   const meaning = explainAvoidance(result, processLabels)
 
   return (
     <div className="space-y-5">
       <ExplainPanel
-        what="The Banker's Safety Algorithm checks whether there exists at least one safe execution sequence — an ordering in which every process can eventually obtain all the resources it needs and finish. It simulates granting resources to each process in turn, using a working copy of the available pool. If no such sequence exists the state is unsafe."
+        what="Banker's Algorithm iterates across all processes to verify whether there exists at least one schedule where every process can complete under maximum claim assumptions."
         meaning={meaning}
       />
 
-      {/* Result */}
       <div className="space-y-3">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500">Result</p>
-        <StatusBadge ok={result.is_safe} okLabel="SAFE" badLabel="UNSAFE" warn warnLabel="UNSAFE" />
-        <p className="text-sm text-gray-400">{result.message}</p>
+        <span className="section-label block">Safety Result</span>
+        <div>
+          <StatusBadge ok={result.is_safe} okLabel="SAFE STATE" badLabel="UNSAFE STATE" warn warnLabel="UNSAFE STATE" />
+        </div>
+        <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed">{result.message}</p>
+
         {result.is_safe && result.safe_sequence.length > 0 && (
-          <div>
-            <p className="text-xs text-gray-500 mb-2">Safe execution sequence</p>
+          <div className="card p-4 space-y-2 mt-3">
+            <span className="section-label block">Safe Execution Schedule</span>
             <div className="flex flex-wrap items-center gap-2">
               {result.safe_sequence.map((idx, pos) => (
                 <div key={pos} className="flex items-center gap-2">
-                  <span className="bg-green-800 text-green-100 rounded-full px-3 py-0.5 text-sm font-medium">
-                    {processLabels[idx] ?? `P${idx}`}
+                  <span className="bg-neutral-900 text-white rounded-md px-3 py-1 text-xs font-mono font-medium shadow-2xs">
+                    #{pos + 1} {processLabels[idx] ?? `P${idx}`}
                   </span>
                   {pos < result.safe_sequence.length - 1 && (
-                    <span className="text-gray-500">→</span>
+                    <span className="text-neutral-400">&rarr;</span>
                   )}
                 </div>
               ))}
             </div>
           </div>
         )}
-        {/* Trace summary */}
-        <details className="group">
-          <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors list-none flex items-center gap-1">
-            <span className="group-open:hidden">▶</span>
-            <span className="hidden group-open:inline">▼</span>
-            Show algorithm trace ({result.steps.length} iterations)
+
+        <details className="card p-3 group">
+          <summary className="text-xs font-medium text-neutral-600 cursor-pointer hover:text-neutral-900 list-none flex items-center justify-between">
+            <span>View Step-by-Step Algorithm Iterations ({result.steps.length} checks)</span>
+            <span className="text-neutral-400 group-open:rotate-180 transition-transform">&darr;</span>
           </summary>
-          <div className="mt-2 space-y-1 pl-4 border-l border-gray-700">
+          <div className="mt-3 space-y-1.5 pt-3 border-t border-neutral-100">
             {result.steps.map((s, i) => (
-              <div key={i} className="flex gap-2 items-start text-xs">
-                <span className={s.process_qualified ? 'text-green-400' : 'text-gray-600'}>●</span>
-                <span className="text-gray-500">#{s.iteration}</span>
-                <span className={s.process_qualified ? 'text-gray-300' : 'text-gray-600'}>
+              <div key={i} className="flex gap-2 items-center text-xs font-mono">
+                <span className={s.process_qualified ? 'text-neutral-900 font-bold' : 'text-neutral-400'}>&bull;</span>
+                <span className="text-neutral-400">#{s.iteration}</span>
+                <span className="font-semibold text-neutral-800">
                   {processLabels[s.process_index] ?? `P${s.process_index}`}
                 </span>
-                <span className={s.process_qualified ? 'text-green-500' : 'text-gray-600'}>
+                <span className={s.process_qualified ? 'text-neutral-900' : 'text-neutral-400'}>
                   {s.process_qualified ? 'qualified' : 'skipped'}
                 </span>
-                <span className="text-gray-600 flex-1">{s.note}</span>
+                <span className="text-neutral-500 flex-1 truncate">{s.note}</span>
               </div>
             ))}
           </div>
@@ -389,30 +334,35 @@ function StepDetection({
   return (
     <div className="space-y-5">
       <ExplainPanel
-        what="Deadlock detection uses the current Request matrix — what each process is actively waiting for right now — together with the Available resources to find any circular-wait cycle. Unlike the Banker's Algorithm, it does not assume a worst-case maximum demand; it checks the actual present state of the system."
+        what="Deadlock detection evaluates actual outstanding requests rather than worst-case limits. It builds a dependency graph and detects if any processes are halted in a circular wait."
         meaning={meaning}
       />
 
       <div className="space-y-3">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500">Result</p>
-        <StatusBadge
-          ok={!result.deadlock_detected}
-          okLabel="NO DEADLOCK"
-          badLabel="DEADLOCKED"
-        />
-        <p className="text-sm text-gray-400">{result.message}</p>
-
+        <span className="section-label block">Detection Outcome</span>
         <div>
-          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Request matrix (input)</p>
+          <StatusBadge
+            ok={!result.deadlock_detected}
+            okLabel="NO DEADLOCK DETECTED"
+            badLabel="CIRCULAR DEADLOCK DETECTED"
+          />
+        </div>
+        <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed">{result.message}</p>
+
+        <div className="pt-2">
+          <span className="section-label block mb-2">Simulated Active Request Matrix</span>
           <MatrixEditor matrix={request} rowLabels={processLabels} colLabels={resourceLabels} readOnly />
         </div>
 
         {result.deadlock_detected && result.deadlocked_processes.length > 0 && (
-          <div>
-            <p className="text-xs text-gray-500 mb-2">Deadlocked processes</p>
+          <div className="card p-4 border-rose-200 bg-rose-50/20 space-y-2">
+            <span className="section-label block text-rose-800">Deadlocked Processes</span>
             <div className="flex flex-wrap gap-2">
               {result.deadlocked_processes.map((idx) => (
-                <span key={idx} className="bg-red-900 text-red-200 border border-red-700 rounded-full px-3 py-0.5 text-sm font-medium">
+                <span
+                  key={idx}
+                  className="bg-white text-rose-700 border border-rose-300 rounded px-2.5 py-1 text-xs font-mono font-bold shadow-2xs"
+                >
                   {processLabels[idx] ?? `P${idx}`}
                 </span>
               ))}
@@ -421,45 +371,22 @@ function StepDetection({
         )}
 
         {!result.deadlock_detected && result.completed_processes.length > 0 && (
-          <div>
-            <p className="text-xs text-gray-500 mb-2">All processes can complete in order</p>
+          <div className="card p-4 space-y-2">
+            <span className="section-label block">Completion Order</span>
             <div className="flex flex-wrap items-center gap-2">
               {result.completed_processes.map((idx, pos) => (
                 <div key={pos} className="flex items-center gap-2">
-                  <span className="bg-green-800 text-green-100 rounded-full px-3 py-0.5 text-sm font-medium">
+                  <span className="bg-neutral-900 text-white rounded px-2.5 py-1 text-xs font-mono font-medium shadow-2xs">
                     {processLabels[idx] ?? `P${idx}`}
                   </span>
                   {pos < result.completed_processes.length - 1 && (
-                    <span className="text-gray-500">→</span>
+                    <span className="text-neutral-400">&rarr;</span>
                   )}
                 </div>
               ))}
             </div>
           </div>
         )}
-
-        <details className="group">
-          <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors list-none flex items-center gap-1">
-            <span className="group-open:hidden">▶</span>
-            <span className="hidden group-open:inline">▼</span>
-            Show detection trace ({result.steps.length} iterations)
-          </summary>
-          <div className="mt-2 space-y-1 pl-4 border-l border-gray-700">
-            {result.steps.map((s, i) => (
-              <div key={i} className="flex gap-2 items-start text-xs">
-                <span className={s.process_qualified ? 'text-green-400' : 'text-gray-600'}>●</span>
-                <span className="text-gray-500">#{s.iteration}</span>
-                <span className={s.process_qualified ? 'text-gray-300' : 'text-gray-600'}>
-                  {processLabels[s.process_index] ?? `P${s.process_index}`}
-                </span>
-                <span className={s.process_qualified ? 'text-green-500' : 'text-gray-600'}>
-                  {s.process_qualified ? 'can complete' : 'skipped'}
-                </span>
-                <span className="text-gray-600 flex-1">{s.note}</span>
-              </div>
-            ))}
-          </div>
-        </details>
       </div>
     </div>
   )
@@ -482,48 +409,43 @@ function StepPrevention({
   return (
     <div className="space-y-5">
       <ExplainPanel
-        what="Prevention analyzes the four Coffman conditions — the necessary conditions for deadlock to occur. All four must be present simultaneously for deadlock to be possible. If any single one can be eliminated by policy or system design, deadlock becomes structurally impossible regardless of future resource requests."
+        what="Prevention inspects the four Coffman conditions necessary for deadlock to manifest. Eliminating any single condition by design prevents deadlocks entirely."
         meaning={meaning}
       />
 
       <div className="space-y-3">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500">Result</p>
-        <div className="text-sm text-gray-300">
-          <span className="font-semibold text-white">{result.conditions_present}</span> of 4 conditions present.{' '}
-          <span className="text-gray-400">{result.summary}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-lg font-mono font-bold text-neutral-900">
+            {result.conditions_present} / 4
+          </span>
+          <span className="section-label">Conditions Active</span>
         </div>
+        <p className="text-xs text-neutral-500">{result.summary}</p>
 
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
           {conditions.map(([key, title]) => {
             const c = result[key]
             return (
               <div
                 key={key}
-                className={[
-                  'rounded-lg border p-4 space-y-1.5',
-                  c.present
-                    ? 'border-red-700 bg-red-950/50'
-                    : 'border-green-800 bg-green-950/30',
-                ].join(' ')}
+                className={`card p-4 space-y-2 ${
+                  c.present ? 'border-neutral-900/40 bg-neutral-50/30' : 'border-neutral-200 bg-white'
+                }`}
               >
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span>{c.present ? '🔴' : '🟢'}</span>
-                  <span className="font-semibold text-sm text-white">{title}</span>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs sm:text-sm text-neutral-900">{title}</span>
                   <span
-                    className={`text-xs rounded-full px-2 py-0.5 font-medium ${
-                      c.present ? 'bg-red-800 text-red-200' : 'bg-green-800 text-green-200'
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${
+                      c.present
+                        ? 'bg-neutral-900 text-white border-neutral-900'
+                        : 'bg-neutral-100 text-neutral-500 border-neutral-200'
                     }`}
                   >
-                    {c.present ? 'PRESENT' : 'NOT PRESENT'}
+                    {c.present ? 'Present' : 'Absent'}
                   </span>
                 </div>
-                <p className="text-xs text-gray-400">{c.explanation}</p>
-                <p className="text-xs text-blue-400">Prevention: {c.prevention_strategy}</p>
-                {c.affected_processes.length > 0 && (
-                  <p className="text-xs text-gray-500">
-                    Affected: {c.affected_processes.join(', ')}
-                  </p>
-                )}
+                <p className="text-xs text-neutral-600 leading-relaxed">{c.explanation}</p>
+                <p className="text-xs text-neutral-800 font-medium pt-1">Strategy: {c.prevention_strategy}</p>
               </div>
             )
           })}
@@ -548,19 +470,18 @@ function StepRecovery({
     return (
       <div className="space-y-5">
         <ExplainPanel
-          what="When a deadlock is confirmed, recovery breaks the cycle by terminating processes one at a time using the lowest_pid strategy — always picking the process with the smallest ID first. Each terminated process releases its resources back to the available pool, and the algorithm checks whether the deadlock has been resolved after each step."
-          meaning="Since detection found no deadlock in this scenario, recovery is not needed. All processes can already complete using the resources they are currently waiting for, so no intervention is required. Recovery would only be triggered if the detection algorithm confirmed a circular-wait cycle."
+          what="Recovery terminates or preempts deadlocked processes to break the circular dependency chain and release locked resources."
+          meaning="Because Step 4 detected no deadlock, recovery is unnecessary. All processes can proceed naturally."
         />
-        <div className="flex items-center gap-2 text-green-400 text-sm">
-          <span>✅</span>
-          <span>No deadlock was detected in Step 4 — recovery is not needed.</span>
+        <div className="card p-4 border-neutral-200 text-xs sm:text-sm text-neutral-700">
+          ✓ No deadlock detected. Recovery mechanisms are safely disengaged.
         </div>
       </div>
     )
   }
 
   if (!result) {
-    return <p className="text-xs text-gray-600 italic">Awaiting recovery result…</p>
+    return <p className="text-xs text-neutral-500 italic">Awaiting recovery algorithm output…</p>
   }
 
   const meaning = explainRecovery(result, detectionResult, processLabels)
@@ -568,67 +489,49 @@ function StepRecovery({
   return (
     <div className="space-y-5">
       <ExplainPanel
-        what="When a deadlock is confirmed, recovery breaks the cycle by terminating processes one at a time using the lowest_pid strategy — always picking the process with the smallest ID first. Each terminated process releases its resources back to the available pool, and the algorithm checks whether the deadlock has been resolved after each step."
+        what="Recovery terminates or preempts deadlocked processes to break the circular dependency chain and release locked resources."
         meaning={meaning}
       />
 
       <div className="space-y-3">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500">Result</p>
-        <StatusBadge ok={result.success} okLabel="DEADLOCK RESOLVED" badLabel="RECOVERY FAILED" />
-        <p className="text-sm text-gray-400">{result.message}</p>
+        <span className="section-label block">Recovery Outcome</span>
+        <div>
+          <StatusBadge ok={result.success} okLabel="DEADLOCK RESOLVED" badLabel="RECOVERY FAILED" />
+        </div>
+        <p className="text-xs sm:text-sm text-neutral-600">{result.message}</p>
 
         {result.termination_steps.length > 0 && (
-          <div>
-            <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Termination steps</p>
-            <div className="space-y-2">
-              {result.termination_steps.map((ts) => (
-                <div
-                  key={ts.step}
-                  className={[
-                    'rounded-lg border px-4 py-3 text-sm space-y-1',
-                    ts.deadlock_resolved
-                      ? 'border-green-700 bg-green-950/40'
-                      : 'border-yellow-700 bg-yellow-950/20',
-                  ].join(' ')}
-                >
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-gray-500 text-xs">#{ts.step}</span>
-                    <span className="font-semibold text-white">Terminate {ts.terminated_process}</span>
-                    {ts.deadlock_resolved && (
-                      <span className="text-xs bg-green-800 text-green-200 rounded-full px-2 py-0.5">
-                        Deadlock resolved ✓
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-400">{ts.reason}</p>
-                  {ts.resources_freed.length > 0 && (
-                    <p className="text-xs text-gray-500">
-                      Resources freed:{' '}
-                      {ts.resources_freed
-                        .map(([rIdx, amt]) => `${resourceLabels[rIdx] ?? `R${rIdx}`}×${amt}`)
-                        .join(', ')}
-                    </p>
-                  )}
-                  {ts.remaining_deadlocked.length > 0 && (
-                    <p className="text-xs text-gray-500">
-                      Still deadlocked: {ts.remaining_deadlocked.join(', ')}
-                    </p>
-                  )}
+          <div className="space-y-2 pt-2">
+            <span className="section-label block">Termination Actions Executed</span>
+            {result.termination_steps.map((ts) => (
+              <div key={ts.step} className="card p-3 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold font-mono text-neutral-900">
+                    Abort {ts.terminated_process}
+                  </span>
+                  <span className="font-medium text-neutral-600">
+                    {ts.deadlock_resolved ? '✓ Deadlock Resolved' : 'Cycle Continues'}
+                  </span>
                 </div>
-              ))}
-            </div>
+                <p className="text-neutral-500">{ts.reason}</p>
+                {ts.resources_freed.length > 0 && (
+                  <p className="text-neutral-700 font-mono">
+                    Reclaimed:{' '}
+                    {ts.resources_freed
+                      .map(([rIdx, amt]) => `${resourceLabels[rIdx] ?? `R${rIdx}`}: +${amt}`)
+                      .join(', ')}
+                  </p>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
         <VectorRow
-          label="Available after recovery"
+          label="Available Vector After Abort Actions"
           values={result.available_after}
           colLabels={resourceLabels}
         />
-        <p className="text-xs text-gray-500">
-          Recovery cost estimate:{' '}
-          <span className="text-white font-bold">{result.cost_estimate}</span>
-        </p>
       </div>
     </div>
   )
@@ -637,12 +540,12 @@ function StepRecovery({
 // ─── Step metadata ────────────────────────────────────────────────────────────
 
 const STEP_TITLES = [
-  'Step 1 — Generated Scenario',
-  'Step 2 — Need Matrix',
-  'Step 3 — Deadlock Avoidance (Banker\'s Algorithm)',
-  'Step 4 — Deadlock Detection',
-  'Step 5 — Deadlock Prevention (Coffman Conditions)',
-  'Step 6 — Deadlock Recovery',
+  'Step 1: Synthesized System State',
+  'Step 2: Calculated Need Matrix',
+  'Step 3: Avoidance Verification (Banker\'s Algorithm)',
+  'Step 4: Multi-Instance Deadlock Detection',
+  'Step 5: Coffman Conditions Prevention Analysis',
+  'Step 6: Deadlock Recovery Execution',
 ]
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -656,12 +559,9 @@ export default function AutoSimulation() {
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<SimResults | null>(null)
 
-  // Active step is independent of loading — once results exist, navigate freely
   const [activeStep, setActiveStep] = useState(1)
   const [isPlaying, setIsPlaying] = useState(false)
   const playTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // ── Derived ────────────────────────────────────────────────────────────────
 
   const resultsReady = phase === 'ready' && results !== null
   const hasDeadlock = results?.detectionResult.deadlock_detected ?? false
@@ -691,8 +591,6 @@ export default function AutoSimulation() {
 
   const maxStep = hasDeadlock ? 6 : 5
 
-  // ── Generate — fires all API calls, caches results ────────────────────────
-
   const generate = useCallback(async () => {
     const sc = generateRandomScenario(forceDeadlock)
     setScenario(sc)
@@ -702,18 +600,16 @@ export default function AutoSimulation() {
     setError(null)
     setPhase('loading')
 
-    const { allocation, maximum: _max, need, available, request, processLabels, resourceLabels, total } = sc
+    const { allocation, need, available, request, processLabels, resourceLabels, total } = sc
     const processDefs = makeProcessDefs(processLabels)
     const resourceDefs = makeResourceDefs(resourceLabels, total)
 
     try {
-      // Fire safety + detection in parallel (no dependency between them)
       const [safetyResult, detectionResult] = await Promise.all([
         postBankerSafety({ allocation, need, available }),
         postDeadlockDetect({ allocation, request, available }),
       ])
 
-      // Prevention can run in parallel too; recovery depends on detection
       const preventionPromise = postPreventionAnalyze({
         processes: processDefs,
         resources: resourceDefs,
@@ -752,8 +648,6 @@ export default function AutoSimulation() {
     }
   }, [forceDeadlock])
 
-  // ── Navigation ─────────────────────────────────────────────────────────────
-
   const canGoTo = useCallback(
     (step: number) => {
       if (!resultsReady) return false
@@ -771,28 +665,19 @@ export default function AutoSimulation() {
     [canGoTo],
   )
 
-  const goNext = useCallback(() => {
-    const next = activeStep + 1
-    if (canGoTo(next)) setActiveStep(next)
-    else if (next > maxStep) {
-      // wrap-around when playing
-      setActiveStep(1)
-    }
-  }, [activeStep, canGoTo, maxStep])
-
   const goPrev = useCallback(() => {
-    const prev = activeStep - 1
-    if (canGoTo(prev)) setActiveStep(prev)
-  }, [activeStep, canGoTo])
+    goTo(activeStep - 1)
+  }, [activeStep, goTo])
 
-  // ── Play All ───────────────────────────────────────────────────────────────
+  const goNext = useCallback(() => {
+    goTo(activeStep + 1)
+  }, [activeStep, goTo])
 
   useEffect(() => {
     if (isPlaying && resultsReady) {
       playTimerRef.current = setInterval(() => {
         setActiveStep((cur) => {
           const next = cur + 1
-          // stop at maxStep
           if (next > maxStep) {
             setIsPlaying(false)
             return cur
@@ -812,17 +697,13 @@ export default function AutoSimulation() {
     }
   }, [isPlaying, resultsReady, maxStep, hasDeadlock])
 
-  // Stop play when regenerating
   useEffect(() => {
     if (phase !== 'ready') setIsPlaying(false)
   }, [phase])
 
-  // ── Keyboard navigation ────────────────────────────────────────────────────
-
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!resultsReady) return
-      // Don't steal keys while user is typing in an input
       if (
         document.activeElement &&
         (document.activeElement.tagName === 'INPUT' ||
@@ -836,16 +717,22 @@ export default function AutoSimulation() {
     return () => window.removeEventListener('keydown', onKey)
   }, [resultsReady, goNext, goPrev])
 
-  // ── Render current step content ────────────────────────────────────────────
-
   function renderStepContent() {
-    if (phase === 'idle') return null
+    if (phase === 'idle') {
+      return (
+        <div className="text-center py-12 space-y-3">
+          <p className="text-sm text-neutral-600 font-medium">
+            Click "Synthesize Scenario &amp; Run Analysis" to generate an OS scenario and run all algorithms.
+          </p>
+        </div>
+      )
+    }
     if (phase === 'loading') {
       return (
-        <div className="flex flex-col items-center justify-center py-20 gap-4">
-          <div className="w-10 h-10 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
-          <p className="text-gray-400 text-sm">Running all analyses…</p>
-          <p className="text-gray-600 text-xs">Banker's safety · Deadlock detection · Prevention · Recovery</p>
+        <div className="flex flex-col items-center justify-center py-16 gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-neutral-900 border-t-transparent animate-spin" />
+          <p className="text-neutral-800 text-xs sm:text-sm font-medium">Running all 4 deadlock algorithms…</p>
+          <p className="text-neutral-400 text-xs">Banker's Avoidance &bull; Matrix Detection &bull; Prevention &bull; Recovery</p>
         </div>
       )
     }
@@ -875,100 +762,72 @@ export default function AutoSimulation() {
     }
   }
 
-  // ── JSX ────────────────────────────────────────────────────────────────────
-
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6 max-w-6xl mx-auto space-y-5">
-
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-2xl font-bold">🤖 Auto Simulation</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          Generates a random resource-allocation scenario and runs every deadlock
-          analysis algorithm at once. Click any step to jump directly to it.
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6 animate-fade-in">
+      {/* Header */}
+      <div className="pb-1 border-b border-neutral-200/60">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+          Automated Scenario Simulation
+        </h1>
+        <p className="text-xs sm:text-sm text-neutral-500 mt-1">
+          Synthesizes a randomized OS model and executes all four pillars of deadlock theory in parallel.
         </p>
       </div>
 
-      {/* ── Controls ────────────────────────────────────────────────────────── */}
-      <SectionCard title="Controls">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-wrap">
-          {/* Force deadlock toggle */}
-          <label className="flex items-center gap-3 cursor-pointer select-none group">
-            <div className="relative">
+      {/* Controls Card */}
+      <SectionCard title="Simulation Controls">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-4 flex-wrap">
+            <button
+              onClick={generate}
+              disabled={phase === 'loading'}
+              className="btn-primary"
+            >
+              {phase === 'loading' ? 'Evaluating Models…' : 'Synthesize Scenario & Run Analysis'}
+            </button>
+
+            <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
-                className="sr-only peer"
                 checked={forceDeadlock}
                 onChange={(e) => setForceDeadlock(e.target.checked)}
+                className="rounded border-neutral-300 text-neutral-900 focus:ring-neutral-900"
               />
-              <div className="w-10 h-5 rounded-full bg-gray-700 peer-checked:bg-red-600 transition-colors" />
-              <div className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform peer-checked:translate-x-5" />
-            </div>
-            <span className="text-sm text-gray-300 group-hover:text-white transition-colors">
-              Force a deadlock scenario
-            </span>
-            {forceDeadlock && (
-              <span className="text-xs bg-red-900 text-red-300 border border-red-700 rounded-full px-2 py-0.5 font-medium">
-                ON
+              <span className="text-xs font-medium text-neutral-700">
+                Force Deliberate Circular Wait
               </span>
-            )}
-          </label>
+            </label>
+          </div>
 
-          {/* Generate button */}
-          <button
-            onClick={generate}
-            disabled={phase === 'loading'}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
-          >
-            🎲 Generate Random Scenario
-          </button>
-
-          {/* Start Over */}
           {phase !== 'idle' && (
             <button
               onClick={generate}
               disabled={phase === 'loading'}
-              className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
+              className="btn-secondary text-xs"
             >
-              ↩ Start Over
+              Regenerate
             </button>
           )}
         </div>
 
         {forceDeadlock && (
-          <p className="text-xs text-red-400 mt-2">
-            ⚠️ The next generated scenario will contain a deliberate circular-wait between two
-            processes — Detection will always find a deadlock.
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2.5 rounded-md mt-3 leading-relaxed">
+            Note: Forced mode intentionally introduces a closed dependency cycle between two processes to trigger detection and recovery phases.
           </p>
         )}
       </SectionCard>
 
-      {/* ── Scenario summary bar ─────────────────────────────────────────────── */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 px-5 py-3 flex flex-wrap gap-6 text-sm">
-        <span className="text-gray-400">
-          Processes: <span className="text-white font-bold">{scenario.numProcesses}</span>
-        </span>
-        <span className="text-gray-400">
-          Resource types: <span className="text-white font-bold">{scenario.numResources}</span>
-        </span>
-        <span className="text-gray-400">
-          Total instances:{' '}
-          <span className="text-white font-bold font-mono">[{scenario.total.join(', ')}]</span>
-        </span>
-        <span className="text-gray-400">
-          Mode:{' '}
-          <span className={forceDeadlock ? 'text-red-400 font-bold' : 'text-green-400 font-bold'}>
-            {forceDeadlock ? 'Forced Deadlock' : 'Random'}
-          </span>
-        </span>
+      {/* Scenario meta strip */}
+      <div className="card px-5 py-3 flex flex-wrap gap-6 text-xs text-neutral-600 bg-neutral-50/70 border-neutral-200/80">
+        <span>Processes: <strong className="text-neutral-900 font-mono">{scenario.numProcesses}</strong></span>
+        <span>Resource Classes: <strong className="text-neutral-900 font-mono">{scenario.numResources}</strong></span>
+        <span>Total Units: <strong className="text-neutral-900 font-mono">[{scenario.total.join(', ')}]</strong></span>
+        <span>Mode: <strong className="text-neutral-900">{forceDeadlock ? 'Deliberate Deadlock' : 'Stochastic'}</strong></span>
       </div>
 
-      {/* ── Error Banner ─────────────────────────────────────────────────────── */}
-      {error && (
-        <ErrorBanner message={error} onDismiss={() => setError(null)} />
-      )}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      {/* ── Summary strip (once results ready) ────────────────────────────── */}
+      {/* Summary strip */}
       {resultsReady && results && (
         <SimSummaryStrip
           safetyLabel={safetyLabel!}
@@ -980,7 +839,7 @@ export default function AutoSimulation() {
         />
       )}
 
-      {/* ── Step navigator ──────────────────────────────────────────────────── */}
+      {/* Step navigator */}
       {phase !== 'idle' && (
         <SimStepper
           activeStep={activeStep}
@@ -994,81 +853,58 @@ export default function AutoSimulation() {
         />
       )}
 
-      {/* ── Step content panel ──────────────────────────────────────────────── */}
+      {/* Step content panel */}
       {phase !== 'idle' && (
-        <div
-          /* Smooth fade between steps */
-          key={`step-${activeStep}-${phase}`}
-          style={{ animation: 'fadeSlideIn 0.25s ease' }}
-        >
-          <SectionCard title={resultsReady ? STEP_TITLES[activeStep - 1] : 'Loading…'}>
-            {renderStepContent()}
-          </SectionCard>
-        </div>
+        <SectionCard title={resultsReady ? STEP_TITLES[activeStep - 1] : 'Loading…'}>
+          {renderStepContent()}
+        </SectionCard>
       )}
 
-      {/* ── Navigation controls ─────────────────────────────────────────────── */}
+      {/* Navigation controls */}
       {resultsReady && (
-        <div className="flex flex-wrap items-center gap-3 pb-10">
-          {/* Previous */}
-          <button
-            onClick={goPrev}
-            disabled={activeStep <= 1}
-            className="bg-gray-700 hover:bg-gray-600 disabled:opacity-30 text-white font-semibold px-4 py-2 rounded-xl text-sm transition-colors"
-          >
-            ← Previous
-          </button>
-
-          {/* Next */}
-          <button
-            onClick={goNext}
-            disabled={activeStep >= maxStep}
-            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white font-semibold px-4 py-2 rounded-xl text-sm transition-colors"
-          >
-            Next →
-          </button>
-
-          {/* Play All / Pause */}
-          {!isPlaying ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 pb-10">
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                if (activeStep >= maxStep) setActiveStep(1)
-                setIsPlaying(true)
-              }}
-              className="bg-gray-800 hover:bg-gray-700 border border-gray-600 text-white font-semibold px-4 py-2 rounded-xl text-sm transition-colors flex items-center gap-2"
+              onClick={goPrev}
+              disabled={activeStep <= 1}
+              className="btn-secondary"
             >
-              ▶ Play All
+              &larr; Previous Step
             </button>
-          ) : (
             <button
-              onClick={() => setIsPlaying(false)}
-              className="bg-gray-800 hover:bg-gray-700 border border-indigo-500 text-indigo-300 font-semibold px-4 py-2 rounded-xl text-sm transition-colors flex items-center gap-2"
+              onClick={goNext}
+              disabled={activeStep >= maxStep}
+              className="btn-primary"
             >
-              ⏸ Pause
+              Next Step &rarr;
             </button>
-          )}
+          </div>
 
-          <span className="text-xs text-gray-600 ml-1">
-            Step {activeStep} of {maxStep} · ← → keys also work
-          </span>
-
-          {/* Start Over on the right */}
-          <button
-            onClick={generate}
-            className="ml-auto bg-gray-700 hover:bg-gray-600 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
-          >
-            ↩ Start Over
-          </button>
+          <div className="flex items-center gap-3">
+            {!isPlaying ? (
+              <button
+                onClick={() => {
+                  if (activeStep >= maxStep) setActiveStep(1)
+                  setIsPlaying(true)
+                }}
+                className="btn-secondary text-xs"
+              >
+                &bull; Auto-Advance (3s)
+              </button>
+            ) : (
+              <button
+                onClick={() => setIsPlaying(false)}
+                className="btn-secondary text-xs text-neutral-900 border-neutral-900"
+              >
+                Pause Auto-Advance
+              </button>
+            )}
+            <span className="text-xs text-neutral-400 font-mono">
+              Step {activeStep} of {maxStep}
+            </span>
+          </div>
         </div>
       )}
-
-      {/* ── Fade animation ─────────────────────────────────────────────────── */}
-      <style>{`
-        @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(6px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
     </div>
   )
 }

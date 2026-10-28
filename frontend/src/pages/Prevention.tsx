@@ -1,18 +1,3 @@
-/**
- * Deadlock Prevention page (/prevention)
- *
- * Analyzes which of the four Coffman conditions are present in the
- * active scenario.  The user can optionally edit the Request matrix
- * (same concept as Detection page — what each process is currently
- * waiting for) to influence the circular-wait check.
- *
- * Displays:
- *   - Overall summary banner
- *   - Four condition cards (Mutual Exclusion, Hold & Wait,
- *     No Preemption, Circular Wait)
- *   - Each card: present/absent badge, explanation, prevention strategy
- */
-
 import { useEffect, useState } from 'react'
 import { postPreventionAnalyze } from '../api/client'
 import { useScenario } from '../context/ScenarioContext'
@@ -21,148 +6,101 @@ import MatrixEditor from '../components/MatrixEditor'
 import SectionCard from '../components/SectionCard'
 import type { ConditionResult, Matrix, PreventionResponse } from '../types'
 
-function zeroMatrix(rows: number, cols: number): Matrix {
-  return Array.from({ length: rows }, () => Array(cols).fill(0))
+function zeroMatrix(r: number, c: number): Matrix {
+  return Array.from({ length: r }, () => Array(c).fill(0))
+}
+function resizeMatrix(m: Matrix, r: number, c: number): Matrix {
+  return Array.from({ length: r }, (_, ri) => Array.from({ length: c }, (_, ci) => m[ri]?.[ci] ?? 0))
 }
 
-function resizeMatrix(m: Matrix, newRows: number, newCols: number): Matrix {
-  return Array.from({ length: newRows }, (_, r) =>
-    Array.from({ length: newCols }, (_, c) => m[r]?.[c] ?? 0),
-  )
-}
-
-// ─── Condition card ───────────────────────────────────────────────────────────
-
-interface ConditionCardProps {
-  result: ConditionResult
-  resourceIds: string[]
-  icon: string
-}
-
-function ConditionCard({ result, resourceIds, icon }: ConditionCardProps) {
+function ConditionCard({ result }: { result: ConditionResult }) {
   const present = result.present
-
   return (
     <div
-      className={[
-        'rounded-xl border p-5 space-y-3 transition-colors',
-        present
-          ? 'border-red-600 bg-red-950/40'
-          : 'border-green-700 bg-green-950/30',
-      ].join(' ')}
+      className={`card p-5 space-y-3.5 transition-all ${
+        present ? 'border-neutral-900/40 bg-neutral-50/30' : 'border-neutral-200 bg-white'
+      }`}
     >
-      {/* Header row */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-xl">{icon}</span>
-          <h3 className="font-semibold text-white text-sm">{result.condition_name}</h3>
+          <span className={`w-2.5 h-2.5 rounded-full ${present ? 'bg-neutral-900' : 'bg-neutral-300'}`} />
+          <h3 className="font-bold text-neutral-900 text-sm sm:text-base">{result.condition_name}</h3>
         </div>
         <span
-          className={[
-            'text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide',
+          className={`text-xs font-semibold px-2.5 py-0.5 rounded-md border ${
             present
-              ? 'bg-red-700 text-red-100'
-              : 'bg-green-800 text-green-100',
-          ].join(' ')}
+              ? 'bg-neutral-900 text-white border-neutral-900'
+              : 'bg-neutral-100 text-neutral-500 border-neutral-200'
+          }`}
         >
-          {present ? 'Present ⚠' : 'Absent ✓'}
+          {present ? 'Present' : 'Broken / Absent'}
         </span>
       </div>
 
-      {/* Affected items (if any) */}
       {(result.affected_processes.length > 0 || result.affected_resources.length > 0) && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 pt-1">
           {result.affected_processes.map((pid) => (
-            <span key={pid} className="text-xs bg-gray-700 text-gray-200 px-2 py-0.5 rounded-full">
+            <span
+              key={pid}
+              className="text-xs bg-neutral-100 text-neutral-800 px-2 py-0.5 rounded border border-neutral-200 font-mono font-medium"
+            >
               {pid}
             </span>
           ))}
           {result.affected_resources.map((rid) => (
-            <span key={rid} className="text-xs bg-gray-600 text-gray-300 px-2 py-0.5 rounded-full">
+            <span
+              key={rid}
+              className="text-xs bg-neutral-50 text-neutral-600 px-2 py-0.5 rounded border border-neutral-200 font-mono"
+            >
               {rid}
             </span>
           ))}
         </div>
       )}
 
-      {/* Explanation */}
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">What was found</p>
-        <p className="text-sm text-gray-200 leading-relaxed">{result.explanation}</p>
+      <div className="space-y-1">
+        <p className="section-label">Analysis Findings</p>
+        <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed">{result.explanation}</p>
       </div>
 
-      {/* Prevention strategy */}
-      <div className={[
-        'rounded-lg p-3',
-        present ? 'bg-gray-800/60' : 'bg-gray-800/30',
-      ].join(' ')}>
-        <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">
-          Prevention strategy
-        </p>
-        <p className={[
-          'text-sm leading-relaxed',
-          present ? 'text-yellow-200' : 'text-gray-400',
-        ].join(' ')}>
-          {result.prevention_strategy}
-        </p>
+      <div className="p-3 rounded-md bg-neutral-50 border border-neutral-200/80 space-y-1">
+        <p className="section-label text-[10px]">OS Prevention Strategy</p>
+        <p className="text-xs text-neutral-700 leading-relaxed font-medium">{result.prevention_strategy}</p>
       </div>
     </div>
   )
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
-
-const CONDITION_META: Record<string, { icon: string }> = {
-  'Mutual Exclusion': { icon: '🔐' },
-  'Hold and Wait':    { icon: '✋' },
-  'No Preemption':    { icon: '🚫' },
-  'Circular Wait':    { icon: '🔄' },
-}
-
-function iconFor(name: string): string {
-  return CONDITION_META[name]?.icon ?? '❓'
-}
-
 export default function Prevention() {
   const { scenario } = useScenario()
-
   const np = scenario.processes.length
   const nr = scenario.resources.length
-  const processIds = scenario.processes.map((p) => p.id)
+  const processIds  = scenario.processes.map((p) => p.id)
   const resourceIds = scenario.resources.map((r) => r.id)
 
-  // Request matrix — same concept as Detection page.
-  // Defaults to all-zero; user can edit to influence circular-wait analysis.
   const [request, setRequest] = useState<Matrix>(() => zeroMatrix(np, nr))
+  useEffect(() => { setRequest((prev) => resizeMatrix(prev, np, nr)) }, [np, nr])
 
-  useEffect(() => {
-    setRequest((prev) => resizeMatrix(prev, np, nr))
-  }, [np, nr])
-
-  // Clear results when scenario changes
-  const [result, setResult] = useState<PreventionResponse | null>(null)
+  const [result, setResult]   = useState<PreventionResponse | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    setResult(null)
-    setError(null)
-  }, [scenario])
+  const [error, setError]     = useState<string | null>(null)
+  useEffect(() => { setResult(null); setError(null) }, [scenario])
 
   async function runAnalysis() {
     setLoading(true)
     setError(null)
     setResult(null)
     try {
-      const res = await postPreventionAnalyze({
-        processes: scenario.processes,
-        resources: scenario.resources,
-        allocation: scenario.allocation,
-        need: scenario.need,
-        available: scenario.available,
-        request_matrix: request,
-      })
-      setResult(res)
+      setResult(
+        await postPreventionAnalyze({
+          processes: scenario.processes,
+          resources: scenario.resources,
+          allocation: scenario.allocation,
+          need: scenario.need,
+          available: scenario.available,
+          request_matrix: request,
+        }),
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -170,110 +108,81 @@ export default function Prevention() {
     }
   }
 
-  // ── Ordered condition list ─────────────────────────────────────────────────
   const conditions: ConditionResult[] = result
-    ? [
-        result.mutual_exclusion,
-        result.hold_and_wait,
-        result.no_preemption,
-        result.circular_wait,
-      ]
+    ? [result.mutual_exclusion, result.hold_and_wait, result.no_preemption, result.circular_wait]
     : []
 
-  // ─── Render ───────────────────────────────────────────────────────────────
-
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6 animate-fade-in">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Deadlock Prevention</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          Scenario: <span className="text-white font-medium">{scenario.name}</span>
-          {' · '}
-          {np} processes · {nr} resource types
-        </p>
-      </div>
-
-      {/* Concept explainer */}
-      <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 text-sm text-gray-400 space-y-1">
-        <p>
-          <span className="text-white font-medium">Prevention</span> checks whether the four
-          Coffman conditions — all of which must hold <em>simultaneously</em> for deadlock to be
-          possible — are present in this scenario's structure.
-        </p>
-        <p className="text-xs text-gray-500">
-          Eliminating any single condition is sufficient to prevent deadlock entirely.
-        </p>
-      </div>
-
-      {/* Request matrix (for circular-wait analysis) */}
-      <SectionCard title="Request Matrix  (for circular-wait detection)">
-        <p className="text-xs text-gray-500 -mt-1 mb-3">
-          Enter what each process is <em>currently waiting for</em>. This is used to build the
-          wait-for graph for the Circular Wait check. Leave all zeros if no process is blocked.
-        </p>
-        <MatrixEditor
-          matrix={request}
-          onChange={setRequest}
-          rowLabels={processIds}
-          colLabels={resourceIds}
-        />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1 border-b border-neutral-200/60">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+            Deadlock Prevention (Coffman Conditions)
+          </h1>
+          <p className="text-xs sm:text-sm text-neutral-500 mt-1">
+            Scenario: <span className="font-semibold text-neutral-900">{scenario.name}</span>
+            {' · '}{np} processes · {nr} resource types
+          </p>
+        </div>
         <button
-          onClick={() => setRequest(zeroMatrix(np, nr))}
-          className="text-xs text-gray-500 hover:text-gray-300 mt-1 transition-colors"
+          onClick={runAnalysis}
+          disabled={loading}
+          className="btn-primary"
         >
-          Reset to all zeros
+          {loading ? 'Evaluating…' : 'Analyze All 4 Conditions'}
         </button>
+      </div>
+
+      {/* Info card */}
+      <div className="card p-4 bg-neutral-50/70 border-neutral-200/80 flex items-start gap-3">
+        <div className="w-1.5 h-1.5 rounded-full bg-neutral-900 mt-2 shrink-0" />
+        <div className="text-xs sm:text-sm text-neutral-600 leading-relaxed">
+          <span className="font-semibold text-neutral-900">Coffman’s Principle: </span>
+          Deadlock is structurally impossible unless all four conditions hold simultaneously. By designing protocols that eliminate even a single condition (such as enforcing total ordering to prevent circular wait), deadlocks are prevented by system design.
+        </div>
+      </div>
+
+      {/* Request Matrix */}
+      <SectionCard
+        title="Pending Request Matrix (for Circular Wait Analysis)"
+        subtitle="Used to construct the wait-for graph cycle check"
+        action={
+          <button
+            onClick={() => setRequest(zeroMatrix(np, nr))}
+            className="text-xs text-neutral-500 hover:text-neutral-900 underline underline-offset-2 transition-colors"
+          >
+            Reset to zero
+          </button>
+        }
+      >
+        <MatrixEditor matrix={request} onChange={setRequest} rowLabels={processIds} colLabels={resourceIds} />
       </SectionCard>
 
-      {/* Analyze button */}
-      <button
-        onClick={runAnalysis}
-        disabled={loading}
-        className="bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-6 py-2.5 rounded-xl text-sm transition-colors"
-      >
-        {loading ? 'Analyzing…' : '🔎 Analyze Conditions'}
-      </button>
-
-      {/* Error */}
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      {/* Summary banner */}
+      {/* Summary */}
       {result && (
-        <div
-          className={[
-            'rounded-2xl border-2 p-5',
-            result.conditions_present === 4
-              ? 'border-red-500 bg-red-950'
-              : result.conditions_present === 0
-              ? 'border-green-500 bg-green-950'
-              : 'border-yellow-500 bg-yellow-950/40',
-          ].join(' ')}
-        >
-          <div className="flex items-start gap-4">
-            <span className="text-3xl">
-              {result.conditions_present === 4 ? '🔴' : result.conditions_present === 0 ? '✅' : '⚠️'}
+        <div className="card p-5 sm:p-6 border-neutral-900/30">
+          <div className="flex items-center gap-3">
+            <span className="text-xl font-mono font-bold text-neutral-900">
+              {result.conditions_present} / 4
             </span>
-            <div>
-              <h2 className="text-lg font-bold text-white">
-                {result.conditions_present} / 4 conditions present
-              </h2>
-              <p className="text-sm text-gray-300 mt-1 leading-relaxed">{result.summary}</p>
-            </div>
+            <span className="text-sm font-semibold uppercase tracking-wider text-neutral-600">
+              Conditions Present
+            </span>
           </div>
+          <p className="text-xs sm:text-sm text-neutral-600 mt-2 leading-relaxed">
+            {result.summary}
+          </p>
         </div>
       )}
 
-      {/* Four condition cards */}
+      {/* Conditions Grid */}
       {result && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {conditions.map((c) => (
-            <ConditionCard
-              key={c.condition_name}
-              result={c}
-              resourceIds={resourceIds}
-              icon={iconFor(c.condition_name)}
-            />
+            <ConditionCard key={c.condition_name} result={c} />
           ))}
         </div>
       )}

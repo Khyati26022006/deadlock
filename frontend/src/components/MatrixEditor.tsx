@@ -1,15 +1,3 @@
-/**
- * MatrixEditor – editable or read-only 2-D integer grid.
- *
- * Props:
- *   matrix      – current values
- *   onChange    – called with updated matrix (omit to make read-only)
- *   rowLabels   – labels for each row  (e.g. ["P0","P1"])
- *   colLabels   – labels for each col  (e.g. ["A","B","C"])
- *   readOnly    – disable all inputs
- *   highlight   – optional per-cell CSS class override fn(row, col) → string
- */
-
 interface Props {
   matrix: number[][]
   onChange?: (updated: number[][]) => void
@@ -42,17 +30,16 @@ export default function MatrixEditor({
   const nCols = matrix[0]?.length ?? 0
 
   return (
-    <div className="overflow-x-auto">
-      <table className="border-collapse text-sm">
+    <div className="overflow-x-auto rounded-lg border border-neutral-200/80 bg-neutral-50/50 p-3">
+      <table className="border-collapse text-sm mx-auto">
         <thead>
           {colLabels && (
             <tr>
-              {/* empty corner cell */}
-              <th className="w-10" />
+              <th className="w-14" />
               {colLabels.map((lbl, c) => (
                 <th
                   key={c}
-                  className="px-3 pb-1 text-xs text-gray-500 font-medium text-center"
+                  className="px-2.5 pb-2.5 text-xs text-neutral-500 font-mono font-semibold text-center tracking-wider uppercase"
                 >
                   {lbl}
                 </th>
@@ -64,14 +51,14 @@ export default function MatrixEditor({
           {matrix.map((row, r) => (
             <tr key={r}>
               {rowLabels && (
-                <td className="pr-2 text-xs text-gray-500 text-right font-medium whitespace-nowrap">
+                <td className="pr-3 text-xs text-neutral-500 text-right font-mono font-semibold whitespace-nowrap py-1">
                   {rowLabels[r] ?? `P${r}`}
                 </td>
               )}
               {Array.from({ length: nCols }, (_, c) => {
                 const extra = highlight ? highlight(r, c) : ''
                 return (
-                  <td key={c} className="p-0.5">
+                  <td key={c} className="p-1">
                     <input
                       type="number"
                       min={0}
@@ -79,15 +66,12 @@ export default function MatrixEditor({
                       readOnly={readOnly || !onChange}
                       onChange={(e) => handleChange(r, c, e.target.value)}
                       className={[
-                        'w-14 text-center rounded-md border py-1 text-sm font-mono',
-                        'focus:outline-none focus:ring-1 focus:ring-blue-500',
+                        'mono-input shadow-2xs',
                         readOnly || !onChange
-                          ? 'bg-gray-900 border-gray-700 text-gray-400 cursor-default'
-                          : 'bg-gray-800 border-gray-600 text-white',
+                          ? 'text-neutral-500 bg-neutral-100/70 border-neutral-200 cursor-default'
+                          : 'text-neutral-900 hover:border-neutral-400 focus:border-neutral-900',
                         extra,
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
+                      ].filter(Boolean).join(' ')}
                     />
                   </td>
                 )

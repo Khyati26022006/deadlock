@@ -11,7 +11,7 @@ export default defineConfig({
       // Forward all /api/* requests to the FastAPI backend.
       // The browser never sees a cross-origin request, so CORS is not needed.
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

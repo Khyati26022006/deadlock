@@ -1,17 +1,3 @@
-/**
- * Deadlock Avoidance page (/avoidance)
- *
- * Two independent sections, both using the active scenario from context:
- *
- * 1. Safety Check — calls POST /api/banker/safety
- *    Shows SAFE / UNSAFE, the safe execution sequence, and the step trace.
- *
- * 2. Resource Request — lets the user pick a process and enter a request
- *    vector, then calls POST /api/banker/request.
- *    Shows GRANTED / DENIED with reason, the updated state if granted,
- *    and the safety result of the hypothetical state.
- */
-
 import { useEffect, useState } from 'react'
 import { postBankerRequest, postBankerSafety } from '../api/client'
 import { useScenario } from '../context/ScenarioContext'
@@ -23,19 +9,22 @@ import type { ResourceRequestResponse, SafetyResponse, Vector } from '../types'
 
 export default function Avoidance() {
   const { scenario } = useScenario()
-
   const np = scenario.processes.length
   const nr = scenario.resources.length
-  const processIds = scenario.processes.map((p) => p.id)
+  const processIds  = scenario.processes.map((p) => p.id)
   const resourceIds = scenario.resources.map((r) => r.id)
 
-  // ── Section 1: Safety Check ────────────────────────────────────────────────
-
-  const [safetyResult, setSafetyResult] = useState<SafetyResponse | null>(null)
+  const [safetyResult, setSafetyResult]   = useState<SafetyResponse | null>(null)
   const [safetyLoading, setSafetyLoading] = useState(false)
-  const [safetyError, setSafetyError] = useState<string | null>(null)
+  const [safetyError, setSafetyError]     = useState<string | null>(null)
 
-  // Re-clear results when the scenario changes
+  const [selectedProcess, setSelectedProcess] = useState(0)
+  const [requestVec, setRequestVec] = useState<Vector>(() => Array(nr).fill(0))
+
+  const [requestResult, setRequestResult]   = useState<ResourceRequestResponse | null>(null)
+  const [requestLoading, setRequestLoading] = useState(false)
+  const [requestError, setRequestError]     = useState<string | null>(null)
+
   useEffect(() => {
     setSafetyResult(null)
     setSafetyError(null)
@@ -43,17 +32,22 @@ export default function Avoidance() {
     setRequestError(null)
   }, [scenario])
 
+  useEffect(() => {
+    setRequestVec((prev) => Array.from({ length: nr }, (_, i) => prev[i] ?? 0))
+  }, [nr])
+
   async function runSafetyCheck() {
     setSafetyLoading(true)
     setSafetyError(null)
     setSafetyResult(null)
     try {
-      const res = await postBankerSafety({
-        allocation: scenario.allocation,
-        need: scenario.need,
-        available: scenario.available,
-      })
-      setSafetyResult(res)
+      setSafetyResult(
+        await postBankerSafety({
+          allocation: scenario.allocation,
+          need: scenario.need,
+          available: scenario.available,
+        }),
+      )
     } catch (err) {
       setSafetyError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -61,35 +55,20 @@ export default function Avoidance() {
     }
   }
 
-  // ── Section 2: Resource Request ────────────────────────────────────────────
-
-  const [selectedProcess, setSelectedProcess] = useState(0)
-  const [requestVec, setRequestVec] = useState<Vector>(() => Array(nr).fill(0))
-
-  // Keep request vector sized to current resource count
-  useEffect(() => {
-    setRequestVec((prev) =>
-      Array.from({ length: nr }, (_, i) => prev[i] ?? 0),
-    )
-  }, [nr])
-
-  const [requestResult, setRequestResult] = useState<ResourceRequestResponse | null>(null)
-  const [requestLoading, setRequestLoading] = useState(false)
-  const [requestError, setRequestError] = useState<string | null>(null)
-
   async function runRequest() {
     setRequestLoading(true)
     setRequestError(null)
     setRequestResult(null)
     try {
-      const res = await postBankerRequest({
-        process_index: selectedProcess,
-        request: requestVec,
-        allocation: scenario.allocation,
-        need: scenario.need,
-        available: scenario.available,
-      })
-      setRequestResult(res)
+      setRequestResult(
+        await postBankerRequest({
+          process_index: selectedProcess,
+          request: requestVec,
+          allocation: scenario.allocation,
+          need: scenario.need,
+          available: scenario.available,
+        }),
+      )
     } catch (err) {
       setRequestError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -97,268 +76,274 @@ export default function Avoidance() {
     }
   }
 
-  // ─── Render ───────────────────────────────────────────────────────────────
-
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6 animate-fade-in">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Deadlock Avoidance</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          Scenario: <span className="text-white font-medium">{scenario.name}</span>
-          {' · '}
-          {np} processes · {nr} resource types
+      <div className="pb-1 border-b border-neutral-200/60">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+          Deadlock Avoidance (Banker's Algorithm)
+        </h1>
+        <p className="text-xs sm:text-sm text-neutral-500 mt-1">
+          Scenario: <span className="font-semibold text-neutral-900">{scenario.name}</span>
+          {' · '}{np} processes · {nr} resource types
         </p>
       </div>
 
-      {/* ── Safety Check ─────────────────────────────────────────────────── */}
-      <SectionCard title="Safety Check  (Banker's Algorithm)">
-        <p className="text-xs text-gray-500 -mt-2 mb-2">
-          Determines whether the current allocation state has a safe execution sequence —
-          i.e. all processes can complete without deadlock.
-        </p>
-
-        <button
-          onClick={runSafetyCheck}
-          disabled={safetyLoading}
-          className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
-        >
-          {safetyLoading ? 'Running…' : '🔒 Run Safety Check'}
-        </button>
-
-        {safetyError && (
-          <ErrorBanner message={safetyError} onDismiss={() => setSafetyError(null)} />
-        )}
+      {/* Part 1: Safety Check */}
+      <SectionCard
+        title="Part 1: Safety Check"
+        subtitle="Evaluates whether current resource claims guarantee safe termination without deadlock"
+        action={
+          <button
+            onClick={runSafetyCheck}
+            disabled={safetyLoading}
+            className="btn-primary"
+          >
+            {safetyLoading ? 'Evaluating…' : 'Run Safety Algorithm'}
+          </button>
+        }
+      >
+        {safetyError && <ErrorBanner message={safetyError} onDismiss={() => setSafetyError(null)} />}
 
         {safetyResult && (
-          <div className="space-y-4 mt-2">
-            {/* Status banner */}
+          <div className="space-y-4 pt-2">
             <div
-              className={[
-                'rounded-2xl border-2 p-5 flex items-center gap-4',
-                safetyResult.is_safe
-                  ? 'bg-green-950 border-green-500'
-                  : 'bg-yellow-950 border-yellow-500',
-              ].join(' ')}
+              className={`card p-5 transition-all ${
+                safetyResult.is_safe ? 'border-neutral-200' : 'border-amber-200 bg-amber-50/20'
+              }`}
             >
-              <span className="text-4xl">{safetyResult.is_safe ? '✅' : '⚠️'}</span>
-              <div>
-                <h3
-                  className={`text-xl font-bold ${safetyResult.is_safe ? 'text-green-300' : 'text-yellow-300'}`}
-                >
-                  {safetyResult.is_safe ? 'SAFE' : 'UNSAFE'}
-                </h3>
-                <p className="text-sm text-gray-400 mt-1">{safetyResult.message}</p>
+              <div className="flex items-start gap-3.5">
+                <span
+                  className={`w-3 h-3 rounded-full mt-1.5 shrink-0 ${
+                    safetyResult.is_safe ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}
+                />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-neutral-900">
+                      {safetyResult.is_safe ? 'Safe State Confirmed' : 'Unsafe State Warning'}
+                    </h3>
+                    <span
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${
+                        safetyResult.is_safe
+                          ? 'bg-neutral-900 text-white border-neutral-900'
+                          : 'bg-amber-100 text-amber-800 border-amber-300'
+                      }`}
+                    >
+                      {safetyResult.is_safe ? 'SAFE' : 'UNSAFE'}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-neutral-600 mt-1 leading-relaxed">
+                    {safetyResult.message}
+                  </p>
+                </div>
               </div>
             </div>
 
-            {/* Safe sequence */}
             {safetyResult.is_safe && safetyResult.safe_sequence.length > 0 && (
-              <SectionCard title="Safe Execution Sequence">
+              <div className="card p-5">
+                <span className="section-label block mb-3">Safe Execution Sequence</span>
                 <div className="flex flex-wrap items-center gap-2">
                   {safetyResult.safe_sequence.map((idx, pos) => (
                     <div key={pos} className="flex items-center gap-2">
-                      <span className="bg-green-800 text-green-100 rounded-full px-4 py-1 text-sm font-medium">
-                        {processIds[idx] ?? `P${idx}`}
+                      <span className="bg-neutral-900 text-white rounded-md px-3 py-1.5 text-xs font-mono font-medium shadow-2xs">
+                        #{pos + 1} {processIds[idx] ?? `P${idx}`}
                       </span>
                       {pos < safetyResult.safe_sequence.length - 1 && (
-                        <span className="text-gray-500">→</span>
+                        <svg className="w-3.5 h-3.5 text-neutral-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                        </svg>
                       )}
                     </div>
                   ))}
                 </div>
-              </SectionCard>
+              </div>
             )}
 
-            {/* Work final */}
-            <SectionCard title="Work Vector (final)">
-              <div className="flex gap-4 flex-wrap">
+            <div className="card p-5">
+              <span className="section-label block mb-3">Final Work Vector</span>
+              <div className="flex gap-2.5 flex-wrap">
                 {safetyResult.work_final.map((v, j) => (
-                  <div key={j} className="flex flex-col items-center gap-1">
-                    <span className="text-base font-bold text-white">{v}</span>
-                    <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
+                  <div key={j} className="flex items-center gap-2 bg-neutral-50 border border-neutral-200/90 rounded-md px-3 py-1.5 shadow-2xs">
+                    <span className="text-xs font-mono font-bold text-neutral-500">{resourceIds[j] ?? `R${j}`}</span>
+                    <span className="w-px h-3 bg-neutral-200" />
+                    <span className="text-sm font-mono font-bold text-neutral-900">{v}</span>
                   </div>
                 ))}
               </div>
-            </SectionCard>
+            </div>
 
-            {/* Step trace */}
             <StepTrace steps={safetyResult.steps} processIds={processIds} />
           </div>
         )}
       </SectionCard>
 
-      {/* ── Resource Request ──────────────────────────────────────────────── */}
-      <SectionCard title="Request Resources">
-        <p className="text-xs text-gray-500 -mt-2 mb-4">
-          Attempt a resource request on behalf of a process. The Banker's Algorithm checks
-          whether granting it keeps the system in a safe state.
-        </p>
-
-        {/* Process selector */}
-        <div className="space-y-1 mb-4">
-          <p className="text-xs text-gray-400 uppercase tracking-wide">Select process</p>
-          <div className="flex flex-wrap gap-2">
-            {scenario.processes.map((p, i) => (
-              <button
-                key={i}
-                onClick={() => { setSelectedProcess(i); setRequestResult(null); setRequestError(null) }}
-                className={[
-                  'px-4 py-1.5 rounded-full text-sm font-medium transition-colors',
-                  selectedProcess === i
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white',
-                ].join(' ')}
-              >
-                {p.id} – {p.name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Request vector */}
-        <SectionCard title={`Request amounts for ${processIds[selectedProcess] ?? `P${selectedProcess}`}`}>
-          <p className="text-xs text-gray-500 mb-3">
-            How many additional instances of each resource this process is requesting right now.
-            Must not exceed its remaining Need.
-          </p>
-          <VectorEditor
-            vector={requestVec}
-            onChange={setRequestVec}
-            colLabels={resourceIds}
-          />
-
-          {/* Need reference for selected process */}
-          <div className="mt-3 pt-3 border-t border-gray-700">
-            <p className="text-xs text-gray-500 mb-2">
-              Need (max remaining) for {processIds[selectedProcess]}:
-            </p>
-            <div className="flex gap-4 flex-wrap">
-              {scenario.need[selectedProcess]?.map((v, j) => (
-                <div key={j} className="flex flex-col items-center gap-1">
-                  <span className="text-sm font-bold text-gray-300">{v}</span>
-                  <span className="text-xs text-gray-600">{resourceIds[j] ?? `R${j}`}</span>
-                </div>
+      {/* Part 2: Resource Request Simulation */}
+      <SectionCard
+        title="Part 2: Resource Request Simulation"
+        subtitle="Simulate an immediate resource request and determine if the OS should grant or postpone it"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="section-label block mb-2">Requesting Process</label>
+            <div className="flex flex-wrap gap-2">
+              {scenario.processes.map((p, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setSelectedProcess(i)
+                    setRequestResult(null)
+                    setRequestError(null)
+                  }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all border ${
+                    selectedProcess === i
+                      ? 'bg-neutral-900 text-white border-neutral-900 shadow-2xs'
+                      : 'bg-white text-neutral-700 border-neutral-300 hover:border-neutral-500 hover:bg-neutral-50'
+                  }`}
+                >
+                  <span className="font-mono font-bold mr-1">{p.id}</span>
+                  <span className="text-neutral-400">({p.name})</span>
+                </button>
               ))}
             </div>
           </div>
 
-          <button
-            onClick={() => setRequestVec(Array(nr).fill(0))}
-            className="text-xs text-gray-500 hover:text-gray-300 mt-2 transition-colors"
-          >
-            Reset to all zeros
-          </button>
-        </SectionCard>
+          <div className="p-4 rounded-lg border border-neutral-200/90 bg-neutral-50/40 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-xs font-semibold text-neutral-700">
+                Request Vector for <span className="font-mono font-bold text-neutral-900">{processIds[selectedProcess] ?? `P${selectedProcess}`}</span>
+              </span>
+              <button
+                onClick={() => setRequestVec(Array(nr).fill(0))}
+                className="text-xs text-neutral-500 hover:text-neutral-900 underline underline-offset-2 transition-colors"
+              >
+                Reset to zero
+              </button>
+            </div>
+            <VectorEditor vector={requestVec} onChange={setRequestVec} colLabels={resourceIds} />
 
-        {/* Submit button */}
-        <button
-          onClick={runRequest}
-          disabled={requestLoading}
-          className="bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-6 py-2.5 rounded-xl text-sm transition-colors"
-        >
-          {requestLoading ? 'Checking…' : '📨 Submit Request'}
-        </button>
-
-        {requestError && (
-          <ErrorBanner message={requestError} onDismiss={() => setRequestError(null)} />
-        )}
-
-        {/* Request result */}
-        {requestResult && (
-          <div className="space-y-4 mt-2">
-            {/* GRANTED / DENIED banner */}
-            <div
-              className={[
-                'rounded-2xl border-2 p-5 flex items-center gap-4',
-                requestResult.granted
-                  ? 'bg-green-950 border-green-500'
-                  : 'bg-red-950 border-red-500',
-              ].join(' ')}
-            >
-              <span className="text-4xl">{requestResult.granted ? '✅' : '❌'}</span>
-              <div>
-                <h3
-                  className={`text-xl font-bold ${requestResult.granted ? 'text-green-300' : 'text-red-300'}`}
-                >
-                  {requestResult.granted ? 'GRANTED' : 'DENIED'}
-                </h3>
-                <p className="text-sm text-gray-400 mt-1">{requestResult.reason}</p>
+            <div className="pt-3 border-t border-neutral-200/70">
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-neutral-400 block mb-2">
+                Remaining Need Limit for {processIds[selectedProcess]}
+              </span>
+              <div className="flex gap-2 flex-wrap">
+                {scenario.need[selectedProcess]?.map((v, j) => (
+                  <div key={j} className="flex items-center gap-1.5 bg-white border border-neutral-200 px-2.5 py-1 rounded text-xs font-mono">
+                    <span className="text-neutral-400 font-bold">{resourceIds[j] ?? `R${j}`}:</span>
+                    <span className="text-neutral-900 font-bold">{v}</span>
+                  </div>
+                ))}
               </div>
             </div>
+          </div>
 
-            {/* Updated state (if granted) */}
-            {requestResult.granted && (
-              <SectionCard title="Updated State After Grant">
-                <div className="space-y-3">
+          <div>
+            <button
+              onClick={runRequest}
+              disabled={requestLoading}
+              className="btn-primary"
+            >
+              {requestLoading ? 'Validating Request…' : 'Submit & Test Request'}
+            </button>
+          </div>
+
+          {requestError && <ErrorBanner message={requestError} onDismiss={() => setRequestError(null)} />}
+
+          {requestResult && (
+            <div className="space-y-4 pt-2">
+              <div
+                className={`card p-5 transition-all ${
+                  requestResult.granted ? 'border-neutral-200' : 'border-rose-200 bg-rose-50/20'
+                }`}
+              >
+                <div className="flex items-start gap-3.5">
+                  <span
+                    className={`w-3 h-3 rounded-full mt-1.5 shrink-0 ${
+                      requestResult.granted ? 'bg-emerald-500' : 'bg-rose-500'
+                    }`}
+                  />
                   <div>
-                    <p className="text-xs text-gray-500 mb-2">New Available</p>
-                    <div className="flex gap-4 flex-wrap">
-                      {requestResult.available.map((v, j) => (
-                        <div key={j} className="flex flex-col items-center gap-1">
-                          <span className="text-base font-bold text-white">{v}</span>
-                          <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
-                        </div>
-                      ))}
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-bold text-neutral-900">
+                        {requestResult.granted ? 'Request Granted' : 'Request Denied'}
+                      </h3>
+                      <span
+                        className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${
+                          requestResult.granted
+                            ? 'bg-neutral-900 text-white border-neutral-900'
+                            : 'bg-rose-50 text-rose-700 border-rose-300'
+                        }`}
+                      >
+                        {requestResult.granted ? 'SAFE TO ALLOCATE' : 'UNSAFE / BLOCKED'}
+                      </span>
                     </div>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">
-                      New Allocation for {processIds[selectedProcess]}
+                    <p className="text-xs sm:text-sm text-neutral-600 mt-1 leading-relaxed">
+                      {requestResult.reason}
                     </p>
-                    <div className="flex gap-4 flex-wrap">
-                      {requestResult.allocation[selectedProcess]?.map((v, j) => (
-                        <div key={j} className="flex flex-col items-center gap-1">
-                          <span className="text-base font-bold text-white">{v}</span>
-                          <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
-                        </div>
-                      ))}
+                  </div>
+                </div>
+              </div>
+
+              {requestResult.granted && (
+                <div className="card p-5 space-y-4">
+                  <span className="section-label block">Hypothetical State After Grant</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-xs font-semibold text-neutral-500 mb-2">New Available Vector</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {requestResult.available.map((v, j) => (
+                          <div key={j} className="flex items-center gap-2 bg-neutral-50 border border-neutral-200 px-2.5 py-1.5 rounded-md text-xs font-mono">
+                            <span className="text-neutral-500">{resourceIds[j] ?? `R${j}`}</span>
+                            <span className="w-px h-3 bg-neutral-200" />
+                            <span className="font-bold text-neutral-900">{v}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">
-                      New Need for {processIds[selectedProcess]}
-                    </p>
-                    <div className="flex gap-4 flex-wrap">
-                      {requestResult.need[selectedProcess]?.map((v, j) => (
-                        <div key={j} className="flex flex-col items-center gap-1">
-                          <span className="text-base font-bold text-white">{v}</span>
-                          <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
-                        </div>
-                      ))}
+                    <div>
+                      <p className="text-xs font-semibold text-neutral-500 mb-2">
+                        Updated Allocation ({processIds[selectedProcess]})
+                      </p>
+                      <div className="flex gap-2 flex-wrap">
+                        {requestResult.allocation[selectedProcess]?.map((v, j) => (
+                          <div key={j} className="flex items-center gap-2 bg-neutral-50 border border-neutral-200 px-2.5 py-1.5 rounded-md text-xs font-mono">
+                            <span className="text-neutral-500">{resourceIds[j] ?? `R${j}`}</span>
+                            <span className="w-px h-3 bg-neutral-200" />
+                            <span className="font-bold text-neutral-900">{v}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </SectionCard>
-            )}
+              )}
 
-            {/* Safety result of the hypothetical state */}
-            {requestResult.safety && (
-              <>
-                <SectionCard
-                  title={`Hypothetical State — ${requestResult.safety.is_safe ? 'SAFE ✅' : 'UNSAFE ⚠️'}`}
-                >
-                  <p className="text-sm text-gray-400">{requestResult.safety.message}</p>
-                  {requestResult.safety.is_safe && requestResult.safety.safe_sequence.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 mt-3">
-                      {requestResult.safety.safe_sequence.map((idx, pos) => (
-                        <div key={pos} className="flex items-center gap-2">
-                          <span className="bg-green-800 text-green-100 rounded-full px-3 py-0.5 text-sm font-medium">
-                            {processIds[idx] ?? `P${idx}`}
-                          </span>
-                          {pos < requestResult.safety!.safe_sequence.length - 1 && (
-                            <span className="text-gray-500">→</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </SectionCard>
-                <StepTrace steps={requestResult.safety.steps} processIds={processIds} />
-              </>
-            )}
-          </div>
-        )}
+              {requestResult.safety && (
+                <>
+                  <div className="card p-5">
+                    <span className="section-label block mb-2">Hypothetical Safety Verification</span>
+                    <p className="text-xs sm:text-sm text-neutral-600">{requestResult.safety.message}</p>
+                    {requestResult.safety.is_safe && requestResult.safety.safe_sequence.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 mt-3">
+                        {requestResult.safety.safe_sequence.map((idx, pos) => (
+                          <div key={pos} className="flex items-center gap-2">
+                            <span className="bg-neutral-900 text-white rounded-md px-2.5 py-1 text-xs font-mono font-medium shadow-2xs">
+                              #{pos + 1} {processIds[idx] ?? `P${idx}`}
+                            </span>
+                            {pos < requestResult.safety!.safe_sequence.length - 1 && (
+                              <span className="text-neutral-400">&rarr;</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <StepTrace steps={requestResult.safety.steps} processIds={processIds} />
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </SectionCard>
     </div>
   )

@@ -1,23 +1,3 @@
-/**
- * Deadlock Recovery page (/recovery)
- *
- * Recovery is only valid after a confirmed deadlock. This page therefore
- * runs the detection algorithm inline first (Step 1), using an editable
- * Request matrix identical to the Detection page pattern. The real API
- * result drives everything downstream:
- *
- *   - If the result is NO_DEADLOCK: the recovery sections are hidden and
- *     the user is told there is nothing to recover from.
- *   - If the result is DEADLOCKED: the deadlocked process IDs are
- *     auto-populated from `detection.deadlocked_processes` (mapped to
- *     string IDs via the scenario process list). The user cannot override
- *     this — they cannot add or remove processes from the set.
- *
- * Recovery sections (only shown when deadlock is confirmed):
- *   A. Process Termination — POST /api/recovery/terminate
- *   B. Resource Preemption — POST /api/recovery/preempt
- */
-
 import { useEffect, useState } from 'react'
 import { postDeadlockDetect, postRecoveryPreempt, postRecoveryTerminate } from '../api/client'
 import { useScenario } from '../context/ScenarioContext'
@@ -26,100 +6,96 @@ import MatrixEditor from '../components/MatrixEditor'
 import SectionCard from '../components/SectionCard'
 import type { DetectionResponse, Matrix, RecoveryResponse } from '../types'
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function zeroMatrix(rows: number, cols: number): Matrix {
-  return Array.from({ length: rows }, () => Array(cols).fill(0))
+function zeroMatrix(r: number, c: number): Matrix { return Array.from({ length: r }, () => Array(c).fill(0)) }
+function resizeMatrix(m: Matrix, r: number, c: number): Matrix {
+  return Array.from({ length: r }, (_, ri) => Array.from({ length: c }, (_, ci) => m[ri]?.[ci] ?? 0))
 }
 
-function resizeMatrix(m: Matrix, newRows: number, newCols: number): Matrix {
-  return Array.from({ length: newRows }, (_, r) =>
-    Array.from({ length: newCols }, (_, c) => m[r]?.[c] ?? 0),
-  )
-}
+const TERMINATE_STRATEGIES = [
+  { value: 'all',           label: 'Terminate all deadlocked at once' },
+  { value: 'min_resources', label: 'One by one — fewest resources held first' },
+  { value: 'lowest_pid',    label: 'One by one — lowest PID first' },
+]
+const PREEMPT_STRATEGIES = [
+  { value: 'min_resources', label: 'Victim selection — fewest resources held' },
+  { value: 'lowest_pid',    label: 'Victim selection — lowest PID first' },
+]
 
-function badge(label: string, style: string) {
+function TerminationResult({ result, resourceIds }: { result: RecoveryResponse; resourceIds: string[] }) {
   return (
-    <span className={`text-xs font-semibold px-3 py-1 rounded-full ${style}`}>
-      {label}
-    </span>
-  )
-}
-
-// ─── Termination result display ───────────────────────────────────────────────
-
-interface TerminationResultProps {
-  result: RecoveryResponse
-  resourceIds: string[]
-}
-
-function TerminationResult({ result, resourceIds }: TerminationResultProps) {
-  return (
-    <div className="space-y-4">
-      <div className={[
-        'rounded-xl border p-4',
-        result.success ? 'border-green-600 bg-green-950/50' : 'border-red-600 bg-red-950/50',
-      ].join(' ')}>
-        <p className="font-semibold text-sm text-white">
-          {result.success ? '✅ Deadlock resolved' : '❌ Deadlock not resolved'}
-        </p>
-        <p className="text-xs text-gray-400 mt-1">{result.message}</p>
-        <p className="text-xs text-gray-500 mt-1">
-          Strategy: <span className="text-gray-300">{result.strategy}</span>
-          {' · '}Cost: <span className="text-gray-300">{result.cost_estimate} process(es) terminated</span>
-        </p>
+    <div className="space-y-4 pt-2">
+      <div
+        className={`card p-5 transition-all ${
+          result.success ? 'border-neutral-200' : 'border-rose-200 bg-rose-50/20'
+        }`}
+      >
+        <div className="flex items-center gap-2.5">
+          <span className={`w-2.5 h-2.5 rounded-full ${result.success ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+          <h4 className="font-bold text-base text-neutral-900">
+            {result.success ? 'Deadlock Successfully Resolved' : 'Recovery Incomplete'}
+          </h4>
+        </div>
+        <p className="text-xs sm:text-sm text-neutral-600 mt-1">{result.message}</p>
+        <div className="flex items-center gap-4 mt-2 text-xs text-neutral-500 flex-wrap">
+          <span>Strategy: <span className="font-mono font-medium text-neutral-800">{result.strategy}</span></span>
+          <span>&bull;</span>
+          <span>Cost Impact: <span className="font-mono font-medium text-neutral-800">{result.cost_estimate} process(es) terminated</span></span>
+        </div>
       </div>
 
       {result.termination_steps.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-xs text-gray-400 uppercase tracking-wide">Termination sequence</p>
+        <div className="space-y-2.5">
+          <p className="section-label">Step-by-Step Abort Sequence</p>
           {result.termination_steps.map((step) => (
             <div
               key={step.step}
-              className={[
-                'rounded-lg border p-4 space-y-2',
-                step.deadlock_resolved
-                  ? 'border-green-700 bg-gray-800/60'
-                  : 'border-gray-700 bg-gray-800/40',
-              ].join(' ')}
+              className="card p-4 space-y-2.5 border-neutral-200/90"
             >
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-500">Step {step.step + 1}</span>
-                  <span className="font-semibold text-red-300">
-                    ✂ Terminated: {step.terminated_process}
+                  <span className="text-xs text-neutral-400 font-mono font-bold">Step #{step.step + 1}</span>
+                  <span className="font-mono font-bold text-sm text-neutral-900">
+                    Abort: {step.terminated_process}
                   </span>
                 </div>
-                {step.deadlock_resolved
-                  ? badge('Deadlock resolved', 'bg-green-800 text-green-100')
-                  : badge('Deadlock persists', 'bg-gray-700 text-gray-300')}
+                <span
+                  className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${
+                    step.deadlock_resolved
+                      ? 'bg-neutral-900 text-white border-neutral-900'
+                      : 'bg-neutral-100 text-neutral-600 border-neutral-200'
+                  }`}
+                >
+                  {step.deadlock_resolved ? 'CYCLE BROKEN' : 'CYCLE PERSISTS'}
+                </span>
               </div>
 
-              <p className="text-xs text-gray-400">{step.reason}</p>
+              <p className="text-xs text-neutral-600">{step.reason}</p>
 
               {step.resources_freed.length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Resources freed:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {step.resources_freed.map(([resIdx, amt], i) => (
-                      <span key={i} className="text-xs bg-gray-700 text-gray-200 px-2 py-0.5 rounded-full">
-                        {resourceIds[resIdx] ?? `R${resIdx}`}: +{amt}
-                      </span>
-                    ))}
-                  </div>
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-xs text-neutral-400 font-medium">Reclaimed:</span>
+                  {step.resources_freed.map(([rIdx, amt], i) => (
+                    <span
+                      key={i}
+                      className="text-xs bg-neutral-50 border border-neutral-200 text-neutral-800 px-2 py-0.5 rounded font-mono"
+                    >
+                      {resourceIds[rIdx] ?? `R${rIdx}`}: +{amt}
+                    </span>
+                  ))}
                 </div>
               )}
 
               {step.remaining_deadlocked.length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Still deadlocked:</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {step.remaining_deadlocked.map((pid) => (
-                      <span key={pid} className="text-xs bg-red-900/60 text-red-200 px-2 py-0.5 rounded-full">
-                        {pid}
-                      </span>
-                    ))}
-                  </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs text-neutral-400">Still in cycle:</span>
+                  {step.remaining_deadlocked.map((pid) => (
+                    <span
+                      key={pid}
+                      className="text-xs bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded font-mono font-semibold"
+                    >
+                      {pid}
+                    </span>
+                  ))}
                 </div>
               )}
             </div>
@@ -128,13 +104,14 @@ function TerminationResult({ result, resourceIds }: TerminationResultProps) {
       )}
 
       {result.available_after.length > 0 && (
-        <div>
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Available after recovery</p>
-          <div className="flex flex-wrap gap-4">
+        <div className="card p-4">
+          <p className="section-label mb-2">Available Vector After Abort Actions</p>
+          <div className="flex flex-wrap gap-2">
             {result.available_after.map((v, j) => (
-              <div key={j} className="flex flex-col items-center gap-1">
-                <span className="text-base font-bold text-green-300">{v}</span>
-                <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
+              <div key={j} className="flex items-center gap-2 bg-neutral-50 border border-neutral-200 px-2.5 py-1.5 rounded-md text-xs font-mono">
+                <span className="text-neutral-500">{resourceIds[j] ?? `R${j}`}</span>
+                <span className="w-px h-3 bg-neutral-200" />
+                <span className="font-bold text-neutral-900">{v}</span>
               </div>
             ))}
           </div>
@@ -144,72 +121,71 @@ function TerminationResult({ result, resourceIds }: TerminationResultProps) {
   )
 }
 
-// ─── Preemption result display ────────────────────────────────────────────────
-
-interface PreemptionResultProps {
-  result: RecoveryResponse
-  resourceIds: string[]
-}
-
-function PreemptionResult({ result, resourceIds }: PreemptionResultProps) {
+function PreemptionResult({ result, resourceIds }: { result: RecoveryResponse; resourceIds: string[] }) {
   return (
-    <div className="space-y-4">
-      <div className={[
-        'rounded-xl border p-4',
-        result.success ? 'border-green-600 bg-green-950/50' : 'border-red-600 bg-red-950/50',
-      ].join(' ')}>
-        <p className="font-semibold text-sm text-white">
-          {result.success ? '✅ Deadlock resolved' : '❌ Deadlock not resolved'}
-        </p>
-        <p className="text-xs text-gray-400 mt-1">{result.message}</p>
-        <p className="text-xs text-gray-500 mt-1">
-          Strategy: <span className="text-gray-300">{result.strategy}</span>
-          {' · '}Cost: <span className="text-gray-300">{result.cost_estimate} process(es) preempted</span>
-        </p>
+    <div className="space-y-4 pt-2">
+      <div
+        className={`card p-5 transition-all ${
+          result.success ? 'border-neutral-200' : 'border-rose-200 bg-rose-50/20'
+        }`}
+      >
+        <div className="flex items-center gap-2.5">
+          <span className={`w-2.5 h-2.5 rounded-full ${result.success ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+          <h4 className="font-bold text-base text-neutral-900">
+            {result.success ? 'Preemption Resolved Deadlock' : 'Preemption Incomplete'}
+          </h4>
+        </div>
+        <p className="text-xs sm:text-sm text-neutral-600 mt-1">{result.message}</p>
+        <div className="flex items-center gap-4 mt-2 text-xs text-neutral-500 flex-wrap">
+          <span>Strategy: <span className="font-mono font-medium text-neutral-800">{result.strategy}</span></span>
+          <span>&bull;</span>
+          <span>Victims: <span className="font-mono font-medium text-neutral-800">{result.cost_estimate}</span></span>
+        </div>
       </div>
 
       {result.preemption_steps.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-xs text-gray-400 uppercase tracking-wide">Preemption actions</p>
+        <div className="space-y-2.5">
+          <p className="section-label">Preemption Execution</p>
           {result.preemption_steps.map((step, i) => (
-            <div key={i} className="rounded-lg border border-yellow-700/50 bg-yellow-950/20 p-4 space-y-3">
+            <div key={i} className="card p-4 space-y-2.5 border-neutral-200/90">
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="font-semibold text-yellow-300">
-                  ⚡ Victim: {step.victim_process}
+                <span className="font-mono font-bold text-sm text-neutral-900">
+                  Victim Process: {step.victim_process}
                 </span>
-                {step.requires_rollback && badge('Rollback required', 'bg-yellow-800 text-yellow-100')}
+                {step.requires_rollback && (
+                  <span className="text-xs font-medium px-2 py-0.5 rounded border bg-neutral-100 text-neutral-700 border-neutral-200">
+                    Rollback Checkpoint Required
+                  </span>
+                )}
               </div>
-
-              <p className="text-xs text-gray-400">{step.reason}</p>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-xs text-gray-500">Process state:</p>
-                <span className="text-xs bg-red-900/50 text-red-200 px-2 py-0.5 rounded-full">
+              <p className="text-xs text-neutral-600">{step.reason}</p>
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-neutral-400">Process State:</span>
+                <span className="bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded font-mono font-medium">
                   {step.victim_state_before}
                 </span>
-                <span className="text-xs text-gray-500">→</span>
-                <span className="text-xs bg-yellow-800/60 text-yellow-200 px-2 py-0.5 rounded-full">
+                <span className="text-neutral-400">&rarr;</span>
+                <span className="bg-neutral-100 text-neutral-800 border border-neutral-200 px-2 py-0.5 rounded font-mono font-medium">
                   {step.victim_state_after}
                 </span>
               </div>
-
               {step.preempted_resources.length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Resources preempted:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {step.preempted_resources.map(([resIdx, amt], j) => (
-                      <span key={j} className="text-xs bg-gray-700 text-gray-200 px-2 py-0.5 rounded-full">
-                        {resourceIds[resIdx] ?? `R${resIdx}`}: −{amt}
-                      </span>
-                    ))}
-                  </div>
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-xs text-neutral-400">Preempted:</span>
+                  {step.preempted_resources.map(([rIdx, amt], j) => (
+                    <span
+                      key={j}
+                      className="text-xs bg-neutral-50 border border-neutral-200 text-neutral-800 px-2 py-0.5 rounded font-mono"
+                    >
+                      {resourceIds[rIdx] ?? `R${rIdx}`}: &minus;{amt}
+                    </span>
+                  ))}
                 </div>
               )}
-
               {step.rollback_checkpoint && (
-                <div className="bg-gray-800/60 rounded-lg p-3">
-                  <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Rollback checkpoint</p>
-                  <p className="text-xs text-gray-300 leading-relaxed">{step.rollback_checkpoint}</p>
+                <div className="bg-neutral-50 border border-neutral-200 rounded p-2.5 text-xs text-neutral-600">
+                  <span className="font-semibold text-neutral-800">Checkpoint: </span>
+                  {step.rollback_checkpoint}
                 </div>
               )}
             </div>
@@ -218,13 +194,14 @@ function PreemptionResult({ result, resourceIds }: PreemptionResultProps) {
       )}
 
       {result.available_after.length > 0 && (
-        <div>
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Available after recovery</p>
-          <div className="flex flex-wrap gap-4">
+        <div className="card p-4">
+          <p className="section-label mb-2">Available Vector After Preemption</p>
+          <div className="flex flex-wrap gap-2">
             {result.available_after.map((v, j) => (
-              <div key={j} className="flex flex-col items-center gap-1">
-                <span className="text-base font-bold text-green-300">{v}</span>
-                <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
+              <div key={j} className="flex items-center gap-2 bg-neutral-50 border border-neutral-200 px-2.5 py-1.5 rounded-md text-xs font-mono">
+                <span className="text-neutral-500">{resourceIds[j] ?? `R${j}`}</span>
+                <span className="w-px h-3 bg-neutral-200" />
+                <span className="font-bold text-neutral-900">{v}</span>
               </div>
             ))}
           </div>
@@ -234,43 +211,29 @@ function PreemptionResult({ result, resourceIds }: PreemptionResultProps) {
   )
 }
 
-// ─── Strategy constants ───────────────────────────────────────────────────────
-
-const TERMINATE_STRATEGIES = [
-  { value: 'all',           label: 'Terminate all at once' },
-  { value: 'min_resources', label: 'One at a time — fewest resources held' },
-  { value: 'lowest_pid',    label: 'One at a time — lowest process ID first' },
-]
-
-const PREEMPT_STRATEGIES = [
-  { value: 'min_resources', label: 'Victim — fewest resources held' },
-  { value: 'lowest_pid',    label: 'Victim — lowest process ID first' },
-]
-
-// ─── Main page ────────────────────────────────────────────────────────────────
-
 export default function Recovery() {
   const { scenario } = useScenario()
-
-  const np = scenario.processes.length
-  const nr = scenario.resources.length
+  const np = scenario.processes.length, nr = scenario.resources.length
   const processIds = scenario.processes.map((p) => p.id)
   const resourceIds = scenario.resources.map((r) => r.id)
 
-  // ── Step 1: Detection (inline — gates everything below) ───────────────────
-  // Same Request matrix pattern as Detection.tsx: editable, zero by default,
-  // auto-resized when the scenario changes.
   const [request, setRequest] = useState<Matrix>(() => zeroMatrix(np, nr))
-
-  useEffect(() => {
-    setRequest((prev) => resizeMatrix(prev, np, nr))
-  }, [np, nr])
+  useEffect(() => { setRequest((prev) => resizeMatrix(prev, np, nr)) }, [np, nr])
 
   const [detection, setDetection] = useState<DetectionResponse | null>(null)
   const [detectLoading, setDetectLoading] = useState(false)
   const [detectError, setDetectError] = useState<string | null>(null)
 
-  // Clear all results whenever the scenario changes
+  const [termStrategy, setTermStrategy] = useState('min_resources')
+  const [termResult, setTermResult] = useState<RecoveryResponse | null>(null)
+  const [termLoading, setTermLoading] = useState(false)
+  const [termError, setTermError] = useState<string | null>(null)
+
+  const [preemptStrategy, setPreemptStrategy] = useState('min_resources')
+  const [preemptResult, setPreemptResult] = useState<RecoveryResponse | null>(null)
+  const [preemptLoading, setPreemptLoading] = useState(false)
+  const [preemptError, setPreemptError] = useState<string | null>(null)
+
   useEffect(() => {
     setDetection(null)
     setDetectError(null)
@@ -284,16 +247,16 @@ export default function Recovery() {
     setDetectLoading(true)
     setDetectError(null)
     setDetection(null)
-    // Also clear any stale recovery results from a previous detection run
     setTermResult(null)
     setPreemptResult(null)
     try {
-      const res = await postDeadlockDetect({
-        allocation: scenario.allocation,
-        request,
-        available: scenario.available,
-      })
-      setDetection(res)
+      setDetection(
+        await postDeadlockDetect({
+          allocation: scenario.allocation,
+          request,
+          available: scenario.available,
+        }),
+      )
     } catch (err) {
       setDetectError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -301,38 +264,28 @@ export default function Recovery() {
     }
   }
 
-  // Derive the confirmed deadlocked PIDs directly from the detection result.
-  // detection.deadlocked_processes contains numeric indices — map them to
-  // string IDs using the scenario process list.
-  // This is the ONLY source of truth for which processes are deadlocked.
   const deadlockedPids: string[] = detection?.deadlock_detected
     ? detection.deadlocked_processes.map((idx) => processIds[idx] ?? `P${idx}`)
     : []
-
   const isDeadlocked = detection?.deadlock_detected === true
   const isClean      = detection?.deadlock_detected === false
-
-  // ── Step 2: Termination ───────────────────────────────────────────────────
-  const [termStrategy, setTermStrategy] = useState('min_resources')
-  const [termResult, setTermResult] = useState<RecoveryResponse | null>(null)
-  const [termLoading, setTermLoading] = useState(false)
-  const [termError, setTermError] = useState<string | null>(null)
 
   async function runTermination() {
     setTermLoading(true)
     setTermError(null)
     setTermResult(null)
     try {
-      const res = await postRecoveryTerminate({
-        processes: scenario.processes,
-        resources: scenario.resources,
-        allocation: scenario.allocation,
-        need: scenario.need,
-        available: scenario.available,
-        deadlocked_pids: deadlockedPids,
-        strategy: termStrategy,
-      })
-      setTermResult(res)
+      setTermResult(
+        await postRecoveryTerminate({
+          processes: scenario.processes,
+          resources: scenario.resources,
+          allocation: scenario.allocation,
+          need: scenario.need,
+          available: scenario.available,
+          deadlocked_pids: deadlockedPids,
+          strategy: termStrategy,
+        }),
+      )
     } catch (err) {
       setTermError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -340,27 +293,22 @@ export default function Recovery() {
     }
   }
 
-  // ── Step 2: Preemption ────────────────────────────────────────────────────
-  const [preemptStrategy, setPreemptStrategy] = useState('min_resources')
-  const [preemptResult, setPreemptResult] = useState<RecoveryResponse | null>(null)
-  const [preemptLoading, setPreemptLoading] = useState(false)
-  const [preemptError, setPreemptError] = useState<string | null>(null)
-
   async function runPreemption() {
     setPreemptLoading(true)
     setPreemptError(null)
     setPreemptResult(null)
     try {
-      const res = await postRecoveryPreempt({
-        processes: scenario.processes,
-        resources: scenario.resources,
-        allocation: scenario.allocation,
-        need: scenario.need,
-        available: scenario.available,
-        deadlocked_pids: deadlockedPids,
-        strategy: preemptStrategy,
-      })
-      setPreemptResult(res)
+      setPreemptResult(
+        await postRecoveryPreempt({
+          processes: scenario.processes,
+          resources: scenario.resources,
+          allocation: scenario.allocation,
+          need: scenario.need,
+          available: scenario.available,
+          deadlocked_pids: deadlockedPids,
+          strategy: preemptStrategy,
+        }),
+      )
     } catch (err) {
       setPreemptError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -368,239 +316,211 @@ export default function Recovery() {
     }
   }
 
-  // ─── Render ───────────────────────────────────────────────────────────────
-
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6 max-w-6xl mx-auto space-y-6">
-
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6 animate-fade-in">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Deadlock Recovery</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          Scenario: <span className="text-white font-medium">{scenario.name}</span>
-          {' · '}
-          {np} processes · {nr} resource types
+      <div className="pb-1 border-b border-neutral-200/60">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+          Deadlock Recovery Engine
+        </h1>
+        <p className="text-xs sm:text-sm text-neutral-500 mt-1">
+          Scenario: <span className="font-semibold text-neutral-900">{scenario.name}</span>
+          {' · '}{np} processes · {nr} resource types
         </p>
       </div>
 
-      {/* Concept note */}
-      <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 text-sm text-gray-400 space-y-1">
-        <p>
-          <span className="text-white font-medium">Recovery</span> is only valid after a confirmed
-          deadlock. Run detection below first — the deadlocked processes are determined by the real
-          algorithm result and cannot be overridden manually.
-        </p>
+      {/* Info card */}
+      <div className="card p-4 bg-neutral-50/70 border-neutral-200/80 flex items-start gap-3">
+        <div className="w-1.5 h-1.5 rounded-full bg-neutral-900 mt-2 shrink-0" />
+        <div className="text-xs sm:text-sm text-neutral-600 leading-relaxed">
+          <span className="font-semibold text-neutral-900">Recovery Workflow: </span>
+          Recovery algorithms only operate on confirmed deadlocked processes. Confirm deadlock in Step 1 to unlock termination and preemption recovery strategies.
+        </div>
       </div>
 
-      {/* ── Step 1: Confirm deadlock ─────────────────────────────────────── */}
-      <SectionCard title="Step 1 — Confirm Deadlock via Detection">
-        <p className="text-xs text-gray-500 -mt-1 mb-3">
-          Enter the Request matrix (what each process is currently waiting for) and run detection.
-          Recovery options unlock only when the result is DEADLOCKED.
-        </p>
-
-        <MatrixEditor
-          matrix={request}
-          onChange={setRequest}
-          rowLabels={processIds}
-          colLabels={resourceIds}
-        />
-
-        <div className="flex items-center gap-4 mt-3 flex-wrap">
-          <button
-            onClick={() => setRequest(zeroMatrix(np, nr))}
-            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-          >
-            Reset to zeros
-          </button>
-
+      {/* Step 1 */}
+      <SectionCard
+        title="Step 1: Confirm Deadlock via Detection"
+        subtitle="Validate the existence of a circular wait before triggering recovery actions"
+        action={
           <button
             onClick={runDetection}
             disabled={detectLoading}
-            className="bg-red-700 hover:bg-red-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
+            className="btn-primary"
           >
-            {detectLoading ? 'Running…' : '🔍 Run Detection'}
+            {detectLoading ? 'Evaluating…' : 'Run Detection'}
           </button>
-        </div>
-
-        {detectError && (
-          <div className="mt-3">
-            <ErrorBanner message={detectError} onDismiss={() => setDetectError(null)} />
+        }
+      >
+        <div className="space-y-4">
+          <MatrixEditor matrix={request} onChange={setRequest} rowLabels={processIds} colLabels={resourceIds} />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setRequest(zeroMatrix(np, nr))}
+              className="text-xs text-neutral-500 hover:text-neutral-900 underline underline-offset-2 transition-colors"
+            >
+              Reset to zero matrix
+            </button>
           </div>
-        )}
 
-        {/* Detection result badge */}
-        {detection && (
-          <div className={[
-            'mt-4 rounded-xl border-2 p-4 flex items-start gap-3',
-            isDeadlocked ? 'border-red-500 bg-red-950/60' : 'border-green-600 bg-green-950/50',
-          ].join(' ')}>
-            <span className="text-2xl mt-0.5">{isDeadlocked ? '🔴' : '✅'}</span>
-            <div className="space-y-1.5 flex-1">
-              <p className="font-bold text-sm text-white">
-                {isDeadlocked ? 'DEADLOCKED' : 'NO DEADLOCK'}
-              </p>
-              <p className="text-xs text-gray-400">{detection.message}</p>
+          {detectError && <ErrorBanner message={detectError} onDismiss={() => setDetectError(null)} />}
 
-              {isDeadlocked && (
-                <div className="pt-1">
-                  <p className="text-xs text-gray-500 mb-1.5">
-                    Confirmed deadlocked processes (auto-populated from detection result):
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {deadlockedPids.map((pid) => (
-                      <span
-                        key={pid}
-                        className="text-xs font-semibold bg-red-800 text-red-100 px-3 py-1 rounded-full"
-                      >
-                        {pid}
-                      </span>
-                    ))}
+          {detection && (
+            <div
+              className={`card p-5 transition-all ${
+                isDeadlocked ? 'border-rose-200 bg-rose-50/20' : 'border-neutral-200'
+              }`}
+            >
+              <div className="flex items-start gap-3.5">
+                <span
+                  className={`w-3 h-3 rounded-full mt-1 shrink-0 ${
+                    isDeadlocked ? 'bg-rose-500' : 'bg-emerald-500'
+                  }`}
+                />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-neutral-900">
+                      {isDeadlocked ? 'Deadlock Confirmed' : 'No Deadlock Found'}
+                    </h3>
+                    <span
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${
+                        isDeadlocked
+                          ? 'bg-rose-50 text-rose-700 border-rose-300'
+                          : 'bg-neutral-900 text-white border-neutral-900'
+                      }`}
+                    >
+                      {isDeadlocked ? 'READY FOR RECOVERY' : 'RECOVERY UNNECESSARY'}
+                    </span>
                   </div>
-                </div>
-              )}
+                  <p className="text-xs sm:text-sm text-neutral-600 mt-1">{detection.message}</p>
 
-              {isClean && (
-                <p className="text-xs text-green-400 pt-1">
-                  No deadlock confirmed — there is nothing to recover from. Try editing the Request
-                  matrix to represent a blocked state, or load a different scenario.
-                </p>
-              )}
+                  {isDeadlocked && (
+                    <div className="pt-3 mt-3 border-t border-rose-200/80">
+                      <span className="section-label block mb-2 text-rose-800">
+                        Target Deadlocked Processes
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {deadlockedPids.map((pid) => (
+                          <span
+                            key={pid}
+                            className="text-xs font-mono font-bold bg-white text-rose-700 border border-rose-300 px-2.5 py-1 rounded shadow-2xs"
+                          >
+                            {pid}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {isClean && (
+                    <p className="text-xs text-neutral-500 mt-2 italic">
+                      All processes can complete with available resources. Recovery strategies are locked.
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </SectionCard>
 
-      {/* Reference: Allocation + Available */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <SectionCard title="Allocation  (reference)">
-          <div className="overflow-x-auto">
-            <table className="text-xs w-full">
-              <thead>
-                <tr>
-                  <th className="text-left text-gray-500 pr-3 pb-1">Process</th>
-                  {resourceIds.map((r) => (
-                    <th key={r} className="text-center text-gray-500 px-2 pb-1">{r}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {scenario.processes.map((p, i) => (
-                  <tr
-                    key={p.id}
-                    className={deadlockedPids.includes(p.id) ? 'text-red-300' : 'text-gray-300'}
-                  >
-                    <td className="pr-3 py-0.5 font-medium">{p.id}</td>
-                    {scenario.allocation[i]?.map((v, j) => (
-                      <td key={j} className="text-center px-2 py-0.5">{v}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </SectionCard>
-        <SectionCard title="Available  (reference)">
-          <div className="flex flex-wrap gap-4 pt-1">
-            {scenario.available.map((v, j) => (
-              <div key={j} className="flex flex-col items-center gap-1">
-                <span className="text-lg font-bold text-white">{v}</span>
-                <span className="text-xs text-gray-500">{resourceIds[j]}</span>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* ── Recovery sections: only rendered when deadlock is confirmed ───── */}
+      {/* Step 2: Recovery Options */}
       {isDeadlocked && (
-        <>
-          {/* ── Option A: Terminate ──────────────────────────────────────── */}
-          <SectionCard title="Option A — Terminate Processes">
-            <p className="text-xs text-gray-500 -mt-1 mb-4">
-              Aborts one or more deadlocked processes. Their held resources are immediately
-              released. Terminated processes cannot continue.
-            </p>
-
-            <div className="flex flex-wrap items-end gap-4">
-              <div className="space-y-1">
-                <label className="text-xs text-gray-400 uppercase tracking-wide block">Strategy</label>
-                <select
-                  value={termStrategy}
-                  onChange={(e) => setTermStrategy(e.target.value)}
-                  className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                >
+        <div className="space-y-6 animate-fade-in">
+          {/* Option A: Process Termination */}
+          <SectionCard
+            title="Recovery Option A: Process Termination"
+            subtitle="Abort deadlocked processes to break the circular wait cycle and reclaim resources"
+          >
+            <div className="space-y-4">
+              <div>
+                <label className="section-label block mb-2">Termination Heuristic</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {TERMINATE_STRATEGIES.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
+                    <label
+                      key={s.value}
+                      className={`flex items-start gap-2.5 p-3 rounded-md border cursor-pointer transition-all ${
+                        termStrategy === s.value
+                          ? 'bg-neutral-900 text-white border-neutral-900 shadow-2xs'
+                          : 'bg-white text-neutral-700 border-neutral-300 hover:border-neutral-400'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="termStrategy"
+                        value={s.value}
+                        checked={termStrategy === s.value}
+                        onChange={() => setTermStrategy(s.value)}
+                        className="sr-only"
+                      />
+                      <span className="text-xs font-medium leading-snug">{s.label}</span>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
 
-              <button
-                onClick={runTermination}
-                disabled={termLoading}
-                className="bg-red-700 hover:bg-red-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
-              >
-                {termLoading ? 'Running…' : '✂ Terminate Processes'}
-              </button>
-            </div>
-
-            {termError && (
-              <div className="mt-4">
-                <ErrorBanner message={termError} onDismiss={() => setTermError(null)} />
-              </div>
-            )}
-
-            {termResult && (
-              <div className="mt-4 border-t border-gray-700 pt-4">
-                <TerminationResult result={termResult} resourceIds={resourceIds} />
-              </div>
-            )}
-          </SectionCard>
-
-          {/* ── Option B: Preempt ────────────────────────────────────────── */}
-          <SectionCard title="Option B — Preempt Resources">
-            <p className="text-xs text-gray-500 -mt-1 mb-4">
-              Forcibly takes resources from victim processes without terminating them. Victims must
-              roll back to their last safe checkpoint and be rescheduled.
-            </p>
-
-            <div className="flex flex-wrap items-end gap-4">
-              <div className="space-y-1">
-                <label className="text-xs text-gray-400 uppercase tracking-wide block">Victim selection</label>
-                <select
-                  value={preemptStrategy}
-                  onChange={(e) => setPreemptStrategy(e.target.value)}
-                  className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              <div>
+                <button
+                  onClick={runTermination}
+                  disabled={termLoading}
+                  className="btn-primary"
                 >
-                  {PREEMPT_STRATEGIES.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
+                  {termLoading ? 'Executing Abort Sequence…' : 'Execute Process Termination'}
+                </button>
               </div>
 
-              <button
-                onClick={runPreemption}
-                disabled={preemptLoading}
-                className="bg-yellow-700 hover:bg-yellow-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors"
-              >
-                {preemptLoading ? 'Running…' : '⚡ Preempt Resources'}
-              </button>
+              {termError && <ErrorBanner message={termError} onDismiss={() => setTermError(null)} />}
+              {termResult && <TerminationResult result={termResult} resourceIds={resourceIds} />}
             </div>
-
-            {preemptError && (
-              <div className="mt-4">
-                <ErrorBanner message={preemptError} onDismiss={() => setPreemptError(null)} />
-              </div>
-            )}
-
-            {preemptResult && (
-              <div className="mt-4 border-t border-gray-700 pt-4">
-                <PreemptionResult result={preemptResult} resourceIds={resourceIds} />
-              </div>
-            )}
           </SectionCard>
-        </>
+
+          {/* Option B: Resource Preemption */}
+          <SectionCard
+            title="Recovery Option B: Resource Preemption"
+            subtitle="Preempt resources from a victim process and roll it back to a safe checkpoint"
+          >
+            <div className="space-y-4">
+              <div>
+                <label className="section-label block mb-2">Victim Selection Policy</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {PREEMPT_STRATEGIES.map((s) => (
+                    <label
+                      key={s.value}
+                      className={`flex items-start gap-2.5 p-3 rounded-md border cursor-pointer transition-all ${
+                        preemptStrategy === s.value
+                          ? 'bg-neutral-900 text-white border-neutral-900 shadow-2xs'
+                          : 'bg-white text-neutral-700 border-neutral-300 hover:border-neutral-400'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="preemptStrategy"
+                        value={s.value}
+                        checked={preemptStrategy === s.value}
+                        onChange={() => setPreemptStrategy(s.value)}
+                        className="sr-only"
+                      />
+                      <span className="text-xs font-medium leading-snug">{s.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <button
+                  onClick={runPreemption}
+                  disabled={preemptLoading}
+                  className="btn-primary"
+                >
+                  {preemptLoading ? 'Executing Preemption…' : 'Execute Resource Preemption'}
+                </button>
+              </div>
+
+              {preemptError && <ErrorBanner message={preemptError} onDismiss={() => setPreemptError(null)} />}
+              {preemptResult && <PreemptionResult result={preemptResult} resourceIds={resourceIds} />}
+            </div>
+          </SectionCard>
+        </div>
       )}
     </div>
   )

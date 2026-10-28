@@ -11,87 +11,106 @@ type SystemStatus = 'loading' | 'safe' | 'unsafe' | 'deadlocked' | 'error'
 
 interface StatusConfig {
   label: string
-  icon: string
-  bg: string
-  border: string
-  text: string
-  badge: string
+  badgeText: string
+  dotClass: string
+  titleColor: string
+  borderClass: string
   description: string
 }
 
 const STATUS_CONFIG: Record<SystemStatus, StatusConfig> = {
   loading: {
-    label: 'Analysing…',
-    icon: '⏳',
-    bg: 'bg-gray-800',
-    border: 'border-gray-600',
-    text: 'text-gray-300',
-    badge: 'bg-gray-700 text-gray-300',
-    description: 'Calling backend algorithms…',
+    label: 'Analysing System State…',
+    badgeText: 'Running Check',
+    dotClass: 'bg-neutral-400 animate-pulse',
+    titleColor: 'text-neutral-900',
+    borderClass: 'border-neutral-200',
+    description: 'Running Banker’s safety and multi-instance deadlock detection algorithms…',
   },
   safe: {
-    label: 'SAFE',
-    icon: '✅',
-    bg: 'bg-green-950',
-    border: 'border-green-500',
-    text: 'text-green-300',
-    badge: 'bg-green-700 text-green-100',
-    description: 'All processes can complete. A safe execution sequence exists.',
+    label: 'Safe State Confirmed',
+    badgeText: 'Guaranteed Safe',
+    dotClass: 'bg-emerald-500',
+    titleColor: 'text-neutral-900',
+    borderClass: 'border-neutral-200',
+    description: 'All processes can run to completion. A verified safe execution order exists with no circular wait.',
   },
   unsafe: {
-    label: 'UNSAFE',
-    icon: '⚠️',
-    bg: 'bg-yellow-950',
-    border: 'border-yellow-500',
-    text: 'text-yellow-300',
-    badge: 'bg-yellow-700 text-yellow-100',
+    label: 'Unsafe State Detected',
+    badgeText: 'Potential Risk',
+    dotClass: 'bg-amber-500',
+    titleColor: 'text-neutral-900',
+    borderClass: 'border-neutral-200',
     description:
-      'The system cannot guarantee all processes will complete — deadlock is possible if worst-case requests arrive. No deadlock has occurred yet.',
+      'The OS cannot guarantee completion if worst-case claims arrive. Deadlock has not occurred yet, but avoidance rules must block risky requests.',
   },
   deadlocked: {
-    label: 'DEADLOCKED',
-    icon: '🔴',
-    bg: 'bg-red-950',
-    border: 'border-red-500',
-    text: 'text-red-300',
-    badge: 'bg-red-700 text-red-100',
+    label: 'Deadlock Detected',
+    badgeText: 'Active Deadlock',
+    dotClass: 'bg-rose-500',
+    titleColor: 'text-neutral-900',
+    borderClass: 'border-rose-200 bg-rose-50/20',
     description:
-      'Confirmed deadlock. One or more processes are permanently blocked in a circular wait.',
+      'Confirmed circular wait. One or more processes are permanently waiting for resources held by each other.',
   },
   error: {
-    label: 'Error',
-    icon: '❌',
-    bg: 'bg-gray-900',
-    border: 'border-red-700',
-    text: 'text-red-400',
-    badge: 'bg-red-900 text-red-300',
-    description: 'An error occurred while contacting the backend.',
+    label: 'Analysis Error',
+    badgeText: 'API Unavailable',
+    dotClass: 'bg-red-500',
+    titleColor: 'text-red-900',
+    borderClass: 'border-red-200 bg-red-50/20',
+    description: 'Could not contact the backend algorithm server. Please verify the API is running.',
   },
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+function StatCard({
+  label,
+  value,
+  sub,
+  highlight = false,
+}: {
+  label: string
+  value: string | number
+  sub?: string
+  highlight?: boolean
+}) {
   return (
-    <div className="bg-gray-800 rounded-xl p-5 flex flex-col gap-1 border border-gray-700">
-      <span className="text-xs uppercase tracking-widest text-gray-500">{label}</span>
-      <span className="text-3xl font-bold text-white">{value}</span>
-      {sub && <span className="text-xs text-gray-400">{sub}</span>}
+    <div className={`card p-4 sm:p-5 flex flex-col justify-between ${highlight ? 'border-neutral-900/40 shadow-xs' : ''}`}>
+      <span className="text-[11px] uppercase tracking-wider font-semibold text-neutral-500">{label}</span>
+      <div className="my-1.5">
+        <span className="text-2xl sm:text-3xl font-bold font-mono text-neutral-900 tracking-tight">{value}</span>
+      </div>
+      {sub && <span className="text-xs text-neutral-500 font-medium truncate">{sub}</span>}
     </div>
   )
 }
 
-function VectorDisplay({ label, vector, resourceIds }: {
-  label: string; vector: number[]; resourceIds: string[]
+function VectorDisplay({
+  label,
+  vector,
+  resourceIds,
+}: {
+  label: string
+  vector: number[]
+  resourceIds: string[]
 }) {
   return (
-    <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-      <span className="text-xs uppercase tracking-widest text-gray-500 block mb-3">{label}</span>
-      <div className="flex flex-wrap gap-4">
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-3.5">
+        <span className="section-label">{label}</span>
+        <span className="text-xs text-neutral-400 font-mono">Unallocated system units</span>
+      </div>
+      <div className="flex flex-wrap gap-2.5">
         {vector.map((v, j) => (
-          <div key={j} className="flex flex-col items-center gap-1">
-            <span className="text-lg font-bold text-white">{v}</span>
-            <span className="text-xs text-gray-500">{resourceIds[j] ?? `R${j}`}</span>
+          <div
+            key={j}
+            className="flex items-center gap-2 bg-neutral-50 border border-neutral-200/90 rounded-md px-3 py-1.5 shadow-2xs"
+          >
+            <span className="text-xs font-mono font-bold text-neutral-500">{resourceIds[j] ?? `R${j}`}</span>
+            <span className="w-px h-3.5 bg-neutral-200" />
+            <span className="text-sm font-mono font-bold text-neutral-900">{v}</span>
           </div>
         ))}
       </div>
@@ -99,22 +118,34 @@ function VectorDisplay({ label, vector, resourceIds }: {
   )
 }
 
-function SafeSequenceDisplay({ sequence, processIds }: {
-  sequence: number[]; processIds: string[]
+function SafeSequenceDisplay({
+  sequence,
+  processIds,
+}: {
+  sequence: number[]
+  processIds: string[]
 }) {
   if (sequence.length === 0) return null
   return (
-    <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-      <span className="text-xs uppercase tracking-widest text-gray-500 block mb-3">
-        Safe Execution Sequence
-      </span>
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-3.5">
+        <span className="section-label">Safe Execution Order (Banker's Algorithm)</span>
+        <span className="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+          Guaranteed completion
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         {sequence.map((idx, pos) => (
           <div key={pos} className="flex items-center gap-2">
-            <span className="bg-green-800 text-green-100 rounded-full px-3 py-1 text-sm font-medium">
-              {processIds[idx] ?? `P${idx}`}
-            </span>
-            {pos < sequence.length - 1 && <span className="text-gray-500">→</span>}
+            <div className="inline-flex items-center gap-1.5 bg-neutral-900 text-white rounded-md px-3 py-1.5 text-xs font-mono font-medium shadow-2xs">
+              <span className="text-neutral-400 text-[10px]">#{pos + 1}</span>
+              <span>{processIds[idx] ?? `P${idx}`}</span>
+            </div>
+            {pos < sequence.length - 1 && (
+              <svg className="w-3.5 h-3.5 text-neutral-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+              </svg>
+            )}
           </div>
         ))}
       </div>
@@ -122,18 +153,36 @@ function SafeSequenceDisplay({ sequence, processIds }: {
   )
 }
 
-function DeadlockedProcessList({ indices, processIds }: {
-  indices: number[]; processIds: string[]
+function DeadlockedProcessList({
+  indices,
+  processIds,
+}: {
+  indices: number[]
+  processIds: string[]
 }) {
   if (indices.length === 0) return null
   return (
-    <div className="bg-red-950 rounded-xl p-5 border border-red-700">
-      <span className="text-xs uppercase tracking-widest text-red-400 block mb-3">
-        Deadlocked Processes
-      </span>
+    <div className="card border-rose-200 bg-rose-50/20 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-rose-500" />
+          <span className="text-xs font-bold uppercase tracking-wider text-rose-800">
+            Confirmed Deadlocked Processes
+          </span>
+        </div>
+        <Link
+          to="/recovery"
+          className="text-xs font-medium text-rose-700 hover:text-rose-900 underline underline-offset-2"
+        >
+          Open Recovery Tool &rarr;
+        </Link>
+      </div>
       <div className="flex flex-wrap gap-2">
         {indices.map((idx) => (
-          <span key={idx} className="bg-red-800 text-red-100 rounded-full px-3 py-1 text-sm font-medium">
+          <span
+            key={idx}
+            className="bg-white text-rose-800 border border-rose-300 rounded-md px-2.5 py-1 text-xs font-mono font-bold shadow-2xs"
+          >
             {processIds[idx] ?? `P${idx}`}
           </span>
         ))}
@@ -197,37 +246,25 @@ export default function Dashboard() {
   const deadlockedCount = detectionResult?.deadlocked_processes.length ?? 0
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6 max-w-5xl mx-auto space-y-6">
-      <div className="flex items-start justify-between">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6 animate-fade-in">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1 border-b border-neutral-200/60">
         <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-gray-400 text-sm mt-1">
-            Scenario: <span className="text-white font-medium">{scenario.name}</span>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+            System Overview & State Analysis
+          </h1>
+          <p className="text-xs sm:text-sm text-neutral-500 mt-1">
+            Active scenario: <span className="font-semibold text-neutral-900">{scenario.name}</span>
+            {' · '}{processIds.length} processes · {resourceIds.length} resource classes
           </p>
         </div>
-        <Link
-          to="/scenario-builder"
-          className="text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 px-3 py-1.5 rounded-lg text-gray-300 hover:text-white transition-colors"
-        >
-          Edit Scenario →
-        </Link>
-      </div>
-
-      {/* Status indicator */}
-      <div className={`rounded-2xl border-2 p-6 ${cfg.bg} ${cfg.border} transition-all`}>
-        <div className="flex items-center gap-4">
-          <span className="text-4xl" role="img" aria-label={cfg.label}>
-            {status === 'loading' ? <span className="inline-block animate-spin">⏳</span> : cfg.icon}
-          </span>
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className={`text-2xl font-bold ${cfg.text}`}>{cfg.label}</h2>
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${cfg.badge}`}>
-                System State
-              </span>
-            </div>
-            <p className="text-gray-400 text-sm mt-1 max-w-xl">{cfg.description}</p>
-          </div>
+        <div className="flex items-center gap-2">
+          <Link to="/scenario-builder" className="btn-secondary">
+            Configure Matrices
+          </Link>
+          <Link to="/auto-simulation" className="btn-primary">
+            Run Auto Simulation
+          </Link>
         </div>
       </div>
 
@@ -235,61 +272,129 @@ export default function Dashboard() {
         <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage(null)} />
       )}
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      {/* System Status Hero Card */}
+      <div className={`card p-5 sm:p-6 transition-all ${cfg.borderClass}`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="mt-1">
+              <span className={`w-3.5 h-3.5 rounded-full inline-block ${cfg.dotClass}`} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className={`text-lg sm:text-xl font-bold tracking-tight ${cfg.titleColor}`}>
+                  {cfg.label}
+                </h2>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold bg-neutral-100 text-neutral-700 border border-neutral-200">
+                  {cfg.badgeText}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-neutral-600 mt-1 max-w-2xl leading-relaxed">
+                {cfg.description}
+              </p>
+            </div>
+          </div>
+
+          <div className="sm:self-center shrink-0">
+            <span className="text-xs font-mono font-medium text-neutral-400 uppercase tracking-wider">
+              {status === 'safe' ? 'Pillars Verified' : status === 'deadlocked' ? 'Action Required' : 'Monitored'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Stat Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard
-          label="Processes"
+          label="Total Processes"
           value={scenario.processes.length}
-          sub={processIds.slice(0, 3).join(', ') + (processIds.length > 3 ? '…' : '')}
+          sub={processIds.slice(0, 4).join(', ') + (processIds.length > 4 ? '…' : '')}
         />
         <StatCard
           label="Resource Types"
           value={scenario.resources.length}
-          sub={resourceIds.slice(0, 3).join(', ') + (resourceIds.length > 3 ? '…' : '')}
+          sub={resourceIds.slice(0, 4).join(', ') + (resourceIds.length > 4 ? '…' : '')}
         />
         <StatCard
           label="Deadlocked"
-          value={status === 'loading' ? '…' : deadlockedCount}
-          sub={deadlockedCount === 0 ? 'None' : `${deadlockedCount} process${deadlockedCount > 1 ? 'es' : ''}`}
+          value={status === 'loading' ? '—' : deadlockedCount}
+          sub={deadlockedCount === 0 ? 'None detected' : `${deadlockedCount} blocked permanently`}
+          highlight={deadlockedCount > 0}
         />
         <StatCard
           label="Safe Sequence"
-          value={status === 'loading' ? '…' : (safetyResult?.safe_sequence.length ? safetyResult.safe_sequence.length + ' steps' : 'None')}
-          sub={safetyResult?.is_safe ? 'Banker\u2019s guarantee' : 'Not available'}
+          value={
+            status === 'loading'
+              ? '—'
+              : safetyResult?.is_safe
+              ? `${safetyResult.safe_sequence.length} steps`
+              : 'None'
+          }
+          sub={safetyResult?.is_safe ? 'Banker’s sequence valid' : 'Unsafe under max demand'}
         />
       </div>
 
-      <VectorDisplay label="Available Resources" vector={scenario.available} resourceIds={resourceIds} />
+      {/* Available Resources Vector */}
+      <VectorDisplay label="Available Vector" vector={scenario.available} resourceIds={resourceIds} />
 
+      {/* Safe Execution Sequence */}
       {safetyResult?.is_safe && (
         <SafeSequenceDisplay sequence={safetyResult.safe_sequence} processIds={processIds} />
       )}
 
+      {/* Deadlocked Processes */}
       {detectionResult?.deadlock_detected && (
         <DeadlockedProcessList indices={detectionResult.deadlocked_processes} processIds={processIds} />
       )}
 
+      {/* Algorithm Analysis Cards */}
       {(safetyResult || detectionResult) && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {safetyResult && (
-            <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-              <span className="text-xs uppercase tracking-widest text-gray-500 block mb-2">Banker's Algorithm</span>
-              <p className="text-sm text-gray-300">{safetyResult.message}</p>
+            <div className="card p-5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="section-label">Banker's Avoidance Engine</span>
+                <span
+                  className={`text-xs font-medium px-2 py-0.5 rounded-md border ${
+                    safetyResult.is_safe
+                      ? 'bg-neutral-900 text-white border-neutral-900'
+                      : 'bg-neutral-100 text-neutral-600 border-neutral-300'
+                  }`}
+                >
+                  {safetyResult.is_safe ? 'SAFE' : 'UNSAFE'}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed pt-1">
+                {safetyResult.message}
+              </p>
             </div>
           )}
+
           {detectionResult && (
-            <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-              <span className="text-xs uppercase tracking-widest text-gray-500 block mb-2">Deadlock Detection</span>
-              <p className="text-sm text-gray-300">{detectionResult.message}</p>
+            <div className="card p-5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="section-label">Deadlock Detection Engine</span>
+                <span
+                  className={`text-xs font-medium px-2 py-0.5 rounded-md border ${
+                    detectionResult.deadlock_detected
+                      ? 'bg-rose-50 text-rose-700 border-rose-300'
+                      : 'bg-neutral-900 text-white border-neutral-900'
+                  }`}
+                >
+                  {detectionResult.deadlock_detected ? 'CYCLE DETECTED' : 'CLEAR'}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed pt-1">
+                {detectionResult.message}
+              </p>
             </div>
           )}
         </div>
       )}
 
       {scenario.description && (
-        <div className="bg-gray-800 rounded-xl p-4 border border-gray-700 text-sm text-gray-400">
-          <span className="text-xs uppercase tracking-widest text-gray-500 block mb-1">Scenario Notes</span>
-          {scenario.description}
+        <div className="card p-4 sm:p-5 bg-neutral-50/50">
+          <span className="section-label block mb-1">Scenario Documentation</span>
+          <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed">{scenario.description}</p>
         </div>
       )}
     </div>
